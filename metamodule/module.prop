@@ -1,0 +1,9 @@
+id=meta-myoverlayfs
+metamodule=1
+name=OverlayFS Enhanced
+version=1.3.4
+versionCode=13400
+author=AshBorn (@Ripper_Hybrid) & KernelSU Devs
+description=Next-Gen OverlayFS engine with real-time kernel inspection & native WebUI.
+updateJson=https://myoverlayfs.pages.dev/update.json
+banner=banner
