@@ -33,15 +33,22 @@ fn walk_dir(dir: &Path, base: &Path, entries: &mut Vec<String>) {
     }
 }
 
-// Parse a mount path to extract the content dir root and module ID.
-// Looks for the /mnt/ segment — everything before it is the content dir,
-// the first path component after it is the module ID.
-fn extract_from_mnt_path(path: &str) -> Option<(String, String)> {
-    let idx = path.find("/mnt/")?;
-    let content_dir = path[..idx + 4].to_string();
-    let remainder = &path[idx + 5..];
-    let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
-    Some((module_id.to_string(), content_dir))
+// Parse a mount path to extract the module root directory and module ID.
+// Supports both direct (/data/adb/modules/<id>) and legacy (/mnt/<id>) paths.
+fn extract_from_module_path(path: &str) -> Option<(String, String)> {
+    if let Some(idx) = path.find("/data/adb/modules/") {
+        let content_dir = path[..idx + 17].to_string(); // "/data/adb/modules"
+        let remainder = &path[idx + 18..];
+        let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
+        return Some((module_id.to_string(), content_dir));
+    }
+    if let Some(idx) = path.find("/mnt/") {
+        let content_dir = path[..idx + 4].to_string();
+        let remainder = &path[idx + 5..];
+        let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
+        return Some((module_id.to_string(), content_dir));
+    }
+    None
 }
 
 // Discover our overlay/bind mounts from kernel mount data.
@@ -62,13 +69,17 @@ pub fn discover_partitions(
     // is stacking. We scan each segment to identify which belong to us.
     for line in mounts_data.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 { continue; }
+        if parts.len() < 4 {
+            continue;
+        }
 
         let mount_point = parts[1];
-        let fs_type     = parts[2];
-        let options     = parts[3];
+        let fs_type = parts[2];
+        let options = parts[3];
 
-        if fs_type != "overlay" { continue; }
+        if fs_type != "overlay" {
+            continue;
+        }
 
         if let Some(lowerdir_str) = options.split(',').find(|s| s.starts_with("lowerdir=")) {
             let paths = lowerdir_str.trim_start_matches("lowerdir=");
@@ -78,29 +89,37 @@ pub fn discover_partitions(
             for path in paths.split(':') {
                 // Strategy 1: env var is set — check if this lowerdir segment lives under it
                 let matched = if !resolved_content_dir.is_empty() {
-                    let prefix = format!("{}/", resolved_content_dir);
+                    let prefix = format!("{}/", resolved_content_dir.trim_end_matches('/'));
                     if path.starts_with(&prefix) {
                         let remainder = &path[prefix.len()..];
-                        if let Some(module_id) = remainder.split('/').next().filter(|s| !s.is_empty()) {
+                        if let Some(module_id) =
+                            remainder.split('/').next().filter(|s| !s.is_empty())
+                        {
                             if !modules_in_order.contains(&module_id.to_string()) {
                                 modules_in_order.push(module_id.to_string());
                             }
                             true
-                        } else { false }
-                    } else { false }
-                } else { false };
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
 
                 // Strategy 2: no env var — derive content dir dynamically from the path itself
                 if !matched {
-                    if let Some((module_id, content_dir)) = extract_from_mnt_path(path) {
-                        if path.contains("/data/adb/") {
-                            is_our_mount = true;
-                            if resolved_content_dir.is_empty() {
-                                resolved_content_dir = content_dir;
-                            }
-                            if !modules_in_order.contains(&module_id) {
-                                modules_in_order.push(module_id);
-                            }
+                    if let Some((module_id, content_dir)) = extract_from_module_path(path)
+                        && path.contains("/data/adb/")
+                    {
+                        is_our_mount = true;
+                        if resolved_content_dir.is_empty() {
+                            resolved_content_dir = content_dir;
+                        }
+                        if !modules_in_order.contains(&module_id) {
+                            modules_in_order.push(module_id);
                         }
                     }
                 } else {
@@ -120,41 +139,54 @@ pub fn discover_partitions(
     // e.g. source=<content_dir>/<module_id>/product/media  mount_point=/product/media
     for line in mounts_data.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 { continue; }
+        if parts.len() < 3 {
+            continue;
+        }
 
-        let source      = parts[0];
+        let source = parts[0];
         let mount_point = parts[1];
-        let fs_type     = parts[2];
+        let fs_type = parts[2];
 
-        if fs_type == "overlay" { continue; }
+        if fs_type == "overlay" {
+            continue;
+        }
 
         // Strategy 1: match source against the already-resolved content dir
         let matched = if !resolved_content_dir.is_empty() {
             let prefix = format!("{}/", resolved_content_dir);
             if source.starts_with(&prefix) {
                 let remainder = &source[prefix.len()..];
-                if let Some(module_id) = remainder.splitn(2, '/').next().filter(|s| !s.is_empty()) {
-                    let entry = active_partitions.entry(mount_point.to_string()).or_default();
+                if let Some(module_id) = remainder.split('/').next().filter(|s| !s.is_empty()) {
+                    let entry = active_partitions
+                        .entry(mount_point.to_string())
+                        .or_default();
                     if !entry.contains(&module_id.to_string()) {
                         entry.push(module_id.to_string());
                     }
                     true
-                } else { false }
-            } else { false }
-        } else { false };
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         // Strategy 2: content dir not yet known — extract it from the source path
-        if !matched {
-            if let Some((module_id, content_dir)) = extract_from_mnt_path(source) {
-                if source.contains("/data/adb/") {
-                    if resolved_content_dir.is_empty() {
-                        resolved_content_dir = content_dir;
-                    }
-                    let entry = active_partitions.entry(mount_point.to_string()).or_default();
-                    if !entry.contains(&module_id) {
-                        entry.push(module_id);
-                    }
-                }
+        if !matched
+            && let Some((module_id, content_dir)) = extract_from_module_path(source)
+            && source.contains("/data/adb/")
+        {
+            if resolved_content_dir.is_empty() {
+                resolved_content_dir = content_dir;
+            }
+            let entry = active_partitions
+                .entry(mount_point.to_string())
+                .or_default();
+            if !entry.contains(&module_id) {
+                entry.push(module_id);
             }
         }
     }
@@ -205,10 +237,10 @@ pub fn collect_module_files(
         let part_name = partition.trim_start_matches('/');
 
         for module_id in modules {
-            let mod_part_path = Path::new(content_dir)
-                .join(module_id)
-                .join(part_name);
-            if !mod_part_path.exists() { continue; }
+            let mod_part_path = Path::new(content_dir).join(module_id).join(part_name);
+            if !mod_part_path.exists() {
+                continue;
+            }
 
             let mut files = Vec::new();
             walk_dir(&mod_part_path, &mod_part_path, &mut files);
@@ -220,14 +252,14 @@ pub fn collect_module_files(
                     // First path component of a relative file path is its sub-partition dir.
                     // Files sitting directly in the partition root have no sub-dir component.
                     let sub: Option<&str> = if f.contains('/') {
-                        f.splitn(2, '/').next().filter(|s| !s.is_empty())
+                        f.split('/').next().filter(|s| !s.is_empty())
                     } else {
                         None
                     };
 
                     let logical_partition = match sub {
                         Some(dir) => format!("/{}/{}", part_name, dir),
-                        None      => format!("/{}", part_name),
+                        None => format!("/{}", part_name),
                     };
 
                     if !p_list.contains(&logical_partition) {
@@ -241,10 +273,14 @@ pub fn collect_module_files(
 
                 // Deduplicate per-module to avoid inflated counts from nested bind mounts
                 // where the same file can appear under both /product and /product/media entries.
-                let module_files = processed_files_per_module.entry(module_id.clone()).or_default();
+                let module_files = processed_files_per_module
+                    .entry(module_id.clone())
+                    .or_default();
                 if !module_files.contains(&virtual_path) {
                     module_files.push(virtual_path.clone());
-                    *global_module_file_counts.entry(module_id.clone()).or_insert(0) += 1;
+                    *global_module_file_counts
+                        .entry(module_id.clone())
+                        .or_insert(0) += 1;
                 }
 
                 // Track all modules providing each virtual path to detect conflicts.
@@ -324,7 +360,18 @@ pub fn render_json(
     json.push_str("{\n");
     json.push_str("  \"status\": \"success\",\n");
 
-    let parts_str = display_partitions.iter()
+    let stealth_available = crate::mysufs::is_mysufs_available();
+    let stealth_version = crate::mysufs::get_version().unwrap_or_else(|_| "inactive".to_string());
+    let stealth_variant = crate::mysufs::get_variant().unwrap_or_else(|_| "standard".to_string());
+    json.push_str(&format!(
+        "  \"stealth\": {{ \"available\": {}, \"version\": \"{}\", \"variant\": \"{}\" }},\n",
+        stealth_available,
+        escape_json(&stealth_version),
+        escape_json(&stealth_variant)
+    ));
+
+    let parts_str = display_partitions
+        .iter()
         .map(|p| format!("\"{}\"", escape_json(p)))
         .collect::<Vec<_>>()
         .join(", ");
@@ -335,20 +382,20 @@ pub fn render_json(
     for mod_id in active_modules {
         let count = file_counts.get(mod_id).copied().unwrap_or(0);
 
-        let mut m_parts = module_partitions
-            .get(mod_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut m_parts = module_partitions.get(mod_id).cloned().unwrap_or_default();
         m_parts.sort();
 
-        let m_parts_str = m_parts.iter()
+        let m_parts_str = m_parts
+            .iter()
             .map(|p| format!("\"{}\"", escape_json(p)))
             .collect::<Vec<_>>()
             .join(", ");
 
         mods_str.push(format!(
             "    {{ \"id\": \"{}\", \"files\": {}, \"partitions\": [{}] }}",
-            escape_json(mod_id), count, m_parts_str
+            escape_json(mod_id),
+            count,
+            m_parts_str
         ));
     }
     json.push_str(&mods_str.join(",\n"));
@@ -358,13 +405,16 @@ pub fn render_json(
     let mut conf_str = Vec::new();
     for (file, mods) in conflicts {
         let winner = &mods[0];
-        let ignored = mods[1..].iter()
+        let ignored = mods[1..]
+            .iter()
             .map(|m| format!("\"{}\"", escape_json(m)))
             .collect::<Vec<_>>()
             .join(", ");
         conf_str.push(format!(
             "    {{ \"file\": \"{}\", \"winner\": \"{}\", \"ignored\": [{}] }}",
-            escape_json(file), escape_json(winner), ignored
+            escape_json(file),
+            escape_json(winner),
+            ignored
         ));
     }
     json.push_str(&conf_str.join(",\n"));
@@ -374,7 +424,7 @@ pub fn render_json(
     json.push_str(&format!("    \"total_overlaid\": {},\n", total_overlaid));
     json.push_str(&format!("    \"total_conflicted\": {}\n", total_conflicted));
     json.push_str("  }\n");
-    json.push_str("}");
+    json.push('}');
 
     json
 }
@@ -391,13 +441,17 @@ pub fn run(args: &[String]) -> Result<()> {
 
     // Primary hint — exported by the mount script before invoking the binary.
     // If absent, the dynamic fallback inside discover_partitions finds it instead.
-    let env_content_dir = std::env::var("MODULE_CONTENT_DIR").ok();
+    let env_content_dir = std::env::var("MODULES_DIR")
+        .or_else(|_| std::env::var("MODULE_CONTENT_DIR"))
+        .ok();
     let (active_partitions, resolved_content_dir) =
         discover_partitions(&mounts_data, env_content_dir.as_deref());
 
     if active_partitions.is_empty() || resolved_content_dir.is_empty() {
         if is_raw {
-            println!("{{ \"status\": \"error\", \"message\": \"No active Meta OverlayFS mounts found in the kernel.\" }}");
+            println!(
+                "{{ \"status\": \"error\", \"message\": \"No active Meta OverlayFS mounts found in the kernel.\" }}"
+            );
         } else {
             info!(target: "myoverlayfs::inspect", "CRITICAL: No active Meta OverlayFS mounts found in the kernel.");
             info!(target: "myoverlayfs::inspect", "The mount process likely failed or the device has not rebooted.");
@@ -479,13 +533,18 @@ mod tests {
     }
 
     #[test]
-    fn extract_from_mnt_path_splits_module_and_content_dir() {
-        let (module, content) =
-            extract_from_mnt_path("/data/adb/metamodule/mnt/modA/system").unwrap();
+    fn extract_from_module_path_splits_module_and_content_dir() {
+        let (module, content) = extract_from_module_path("/data/adb/modules/modA/system").unwrap();
         assert_eq!(module, "modA");
-        assert_eq!(content, "/data/adb/metamodule/mnt");
-        assert!(extract_from_mnt_path("/system/build.prop").is_none());
-        assert!(extract_from_mnt_path("/foo/mnt/").is_none());
+        assert_eq!(content, "/data/adb/modules");
+
+        let (module_legacy, content_legacy) =
+            extract_from_module_path("/data/adb/metamodule/mnt/modB/vendor").unwrap();
+        assert_eq!(module_legacy, "modB");
+        assert_eq!(content_legacy, "/data/adb/metamodule/mnt");
+
+        assert!(extract_from_module_path("/system/build.prop").is_none());
+        assert!(extract_from_module_path("/foo/mnt/").is_none());
     }
 
     #[test]
@@ -530,8 +589,7 @@ mod tests {
 
     #[test]
     fn discover_tracks_bind_mount_fallbacks() {
-        let mounts =
-            "/cnt/modA/product/media /product/media ext4 ro,seclabel 0 0\n";
+        let mounts = "/cnt/modA/product/media /product/media ext4 ro,seclabel 0 0\n";
         let (active, resolved) = discover_partitions(mounts, Some("/cnt"));
         assert_eq!(resolved, "/cnt");
         assert_eq!(active["/product/media"], vec!["modA".to_string()]);

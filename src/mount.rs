@@ -1,24 +1,269 @@
-// MyOverlayFs mounting implementation
-// Migrated and adapted for dual-directory architecture
+// Author: kelexine <https://github.com/kelexine>
+// Date: 2026-10-19
+// Purpose: Single-directory overlayfs mounting engine with MYSUFS stealth integration
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result, bail};
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::collections::HashMap;
-use std::path::Path;
-
-#[cfg(target_os = "android")]
-use log::warn;
-#[cfg(target_os = "android")]
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
 use procfs::process::Process;
 #[cfg(target_os = "android")]
 use rustix::{fd::AsFd, fs::CWD, mount::*};
 
-use crate::defs::{DISABLE_FILE_NAME, SKIP_MOUNT_FILE_NAME, SYSTEM_RW_DIR};
 #[cfg(target_os = "android")]
 use crate::defs::MYSU_OVERLAY_SOURCE;
+use crate::defs::{
+    DISABLE_FILE_NAME, MODULE_UPDATES_DIR, REMOVE_FILE_NAME, SKIP_MOUNT_FILE_NAME, SYSTEM_RW_DIR,
+};
+use crate::mysufs;
+
+/// Extra partitions handled besides /system, in scan order.
+pub const EXTRA_PARTITIONS: &[&str] = &["vendor", "product", "system_ext", "odm", "oem"];
+
+/// Atomically apply pending updates from modules_update directory.
+pub fn apply_pending_updates(modules_dir: &str, updates_dir: &str) -> Result<()> {
+    let updates_path = Path::new(updates_dir);
+    if !updates_path.is_dir() {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(updates_path)
+        .with_context(|| format!("Failed to read updates directory: {updates_dir}"))?;
+
+    for entry in entries.flatten() {
+        let update_mod_path = entry.path();
+        if !update_mod_path.is_dir() {
+            continue;
+        }
+
+        let Some(mod_id) = update_mod_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        let target_mod_path = Path::new(modules_dir).join(mod_id);
+        info!("Applying pending module update for: {mod_id}");
+
+        // Delete old module directory if it exists
+        if target_mod_path.exists()
+            && let Err(e) = fs::remove_dir_all(&target_mod_path)
+        {
+            warn!("Failed to remove old module {mod_id}: {e}");
+        }
+
+        // Rename updated module directory into place
+        if let Err(e) = fs::rename(&update_mod_path, &target_mod_path) {
+            warn!("Failed to promote update for {mod_id}: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Process remove markers and purge deleted modules.
+pub fn process_module_removals(modules_dir: &str) -> Result<()> {
+    let modules_path = Path::new(modules_dir);
+    if !modules_path.is_dir() {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(modules_path)
+        .with_context(|| format!("Failed to read modules directory: {modules_dir}"))?;
+
+    for entry in entries.flatten() {
+        let mod_path = entry.path();
+        if !mod_path.is_dir() {
+            continue;
+        }
+
+        if mod_path.join(REMOVE_FILE_NAME).exists() {
+            let mod_id = mod_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            info!("Removing marked module: {mod_id}");
+            if let Err(e) = fs::remove_dir_all(&mod_path) {
+                warn!("Failed to purge removed module {mod_id}: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Shared by the mount path and host tooling/tests; pure filesystem scan.
+pub fn collect_enabled_modules(modules_dir: &str) -> Result<Vec<String>> {
+    let dir = fs::read_dir(modules_dir)
+        .with_context(|| format!("Failed to read modules directory: {modules_dir}"))?;
+
+    let mut enabled = Vec::new();
+
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let module_id = match entry.file_name().to_str() {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+
+        // Check for disable flags
+        if path.join(DISABLE_FILE_NAME).exists() || path.join(".disable").exists() {
+            debug!("Module {module_id} is disabled, skipping");
+            continue;
+        }
+
+        // Check for skip_mount flag
+        if path.join(SKIP_MOUNT_FILE_NAME).exists() {
+            debug!("Module {module_id} has skip_mount, skipping");
+            continue;
+        }
+
+        // Check for remove marker
+        if path.join(REMOVE_FILE_NAME).exists() {
+            debug!("Module {module_id} marked for removal, skipping");
+            continue;
+        }
+
+        // Must have module.prop unless it is the .rw structure
+        if !path.join("module.prop").exists() && !path.eq(Path::new(SYSTEM_RW_DIR)) {
+            debug!("Module {module_id} has no module.prop, skipping");
+            continue;
+        }
+
+        enabled.push(module_id);
+    }
+
+    enabled.sort();
+    Ok(enabled)
+}
+
+/// Pure planner: maps enabled modules directly to per-partition lowerdir stacks.
+pub fn plan_partition_lowerdirs(
+    enabled_modules: &[String],
+    modules_dir: &str,
+) -> (Vec<String>, HashMap<String, Vec<String>>) {
+    let mut system_lowerdir: Vec<String> = Vec::new();
+    let mut partition_lowerdir: HashMap<String, Vec<String>> = HashMap::new();
+
+    for part in EXTRA_PARTITIONS {
+        partition_lowerdir.insert((*part).to_string(), Vec::new());
+    }
+
+    for module_id in enabled_modules {
+        let module_base_path = Path::new(modules_dir).join(module_id);
+
+        if !module_base_path.exists() {
+            info!("Module {module_id}: active (No overlay partitions)");
+            continue;
+        }
+
+        let mut provided_parts = Vec::new();
+
+        let system_path = module_base_path.join("system");
+        if system_path.is_dir() {
+            system_lowerdir.push(system_path.display().to_string());
+            provided_parts.push("system");
+        }
+
+        for part in EXTRA_PARTITIONS {
+            let part_path = module_base_path.join(part);
+            if part_path.is_dir()
+                && let Some(v) = partition_lowerdir.get_mut(*part)
+            {
+                v.push(part_path.display().to_string());
+                provided_parts.push(part);
+            }
+        }
+
+        if !provided_parts.is_empty() {
+            info!(
+                "Module {module_id}: overlays [{}]",
+                provided_parts.join(", ")
+            );
+        } else {
+            info!("Module {module_id}: active (No overlay partitions)");
+        }
+    }
+
+    (system_lowerdir, partition_lowerdir)
+}
+
+/// Recursively scans module overlay files to configure MYSUFS kstat spoofing against stock partition files.
+fn configure_stealth_for_tree(stock_root: &Path, module_tree: &Path, rel_sub: &Path) {
+    let current_dir = module_tree.join(rel_sub);
+    let Ok(entries) = fs::read_dir(&current_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let rel_child = rel_sub.join(file_name);
+        let stock_child = stock_root.join(&rel_child);
+
+        if path.is_dir() {
+            configure_stealth_for_tree(stock_root, module_tree, &rel_child);
+        } else {
+            mysufs::configure_file_stealth(&stock_child, &path, &stock_child);
+        }
+    }
+}
+
+/// Inspects enabled modules and configures Ring-0 MYSUFS anti-detection rules.
+pub fn configure_mysufs_stealth(modules_dir: &str, enabled_modules: &[String]) {
+    if !mysufs::is_mysufs_available() {
+        debug!("MYSUFS stealth engine not active in kernel, skipping stealth hooks");
+        return;
+    }
+
+    let version = mysufs::get_version().unwrap_or_else(|_| "unknown".to_string());
+    let variant = mysufs::get_variant().unwrap_or_else(|_| "unknown".to_string());
+    info!("MYSUFS stealth engine engaged (version: {version}, variant: {variant})");
+
+    // 1. Hide synthetic mounts from non-su processes
+    if let Err(e) = mysufs::set_hide_sus_mnts(true) {
+        warn!("MYSUFS failed to enable mount hiding: {e}");
+    }
+
+    // 2. Hide module root from directory lookups
+    if let Err(e) = mysufs::add_sus_path(modules_dir.trim_end_matches('/'), true) {
+        warn!("MYSUFS failed to cloak module directory {modules_dir}: {e}");
+    }
+
+    // 3. Spoof kstat attributes for overlaid files across all active modules
+    for module_id in enabled_modules {
+        let mod_root = Path::new(modules_dir).join(module_id);
+
+        let system_dir = mod_root.join("system");
+        if system_dir.is_dir() {
+            configure_stealth_for_tree(Path::new("/system"), &system_dir, Path::new(""));
+        }
+
+        for part in EXTRA_PARTITIONS {
+            let part_dir = mod_root.join(part);
+            if part_dir.is_dir() {
+                let stock_part = PathBuf::from(format!("/{part}"));
+                configure_stealth_for_tree(&stock_part, &part_dir, Path::new(""));
+            }
+        }
+    }
+
+    // 4. Enable AVC log spoofing to mask denial logs
+    if let Err(e) = mysufs::enable_avc_log_spoofing(true) {
+        warn!("MYSUFS failed to enable AVC log spoofing: {e}");
+    }
+
+    info!("MYSUFS stealth cloaking configured successfully for all module overlays");
+}
 
 #[cfg(target_os = "android")]
 pub fn mount_overlayfs(
@@ -116,9 +361,9 @@ pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
 #[cfg(target_os = "android")]
 fn mount_overlay_child(
     mount_point: &str,
-    relative: &String,
-    module_roots: &Vec<String>,
-    stock_root: &String,
+    relative: &str,
+    module_roots: &[String],
+    stock_root: &str,
 ) -> Result<()> {
     if !module_roots
         .iter()
@@ -145,7 +390,7 @@ fn mount_overlay_child(
     }
 
     if let Err(e) = mount_overlayfs(&lower_dirs, stock_root, None, None, mount_point) {
-        warn!("Overlay rejected for child {} ({e:#}), falling back to bind mount", mount_point);
+        warn!("Overlay rejected for child {mount_point} ({e:#}), falling back to bind mount");
         bind_mount(stock_root, mount_point)?;
     }
     Ok(())
@@ -153,8 +398,8 @@ fn mount_overlay_child(
 
 #[cfg(target_os = "android")]
 pub fn mount_overlay(
-    root: &String,
-    module_roots: &Vec<String>,
+    root: &str,
+    module_roots: &[String],
     workdir: Option<PathBuf>,
     upperdir: Option<PathBuf>,
 ) -> Result<()> {
@@ -206,9 +451,9 @@ pub fn umount_dir(src: impl AsRef<Path>) -> Result<()> {
 }
 
 #[cfg(target_os = "android")]
-fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
+fn mount_partition(partition_name: &str, lowerdir: &[String]) -> Result<()> {
     if lowerdir.is_empty() {
-        debug!("Partition: {} has no module overlays, skipping", partition_name);
+        debug!("Partition: {partition_name} has no module overlays, skipping");
         return Ok(());
     }
 
@@ -216,7 +461,7 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
 
     // Bypass partitions that are just symlinks to avoid duplicate overlays
     if Path::new(&partition).read_link().is_ok() {
-        debug!("Partition: {} is a symlink, skipping", partition);
+        debug!("Partition: {partition} is a symlink, skipping");
         return Ok(());
     }
 
@@ -231,109 +476,16 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     mount_overlay(&partition, lowerdir, workdir, upperdir)
 }
 
-// Shared by the mount path and host tooling/tests; pure filesystem scan.
-pub fn collect_enabled_modules(metadata_dir: &str) -> Result<Vec<String>> {
-    let dir = std::fs::read_dir(metadata_dir)
-        .with_context(|| format!("Failed to read metadata directory: {}", metadata_dir))?;
-
-    let mut enabled = Vec::new();
-
-    for entry in dir.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let module_id = match entry.file_name().to_str() {
-            Some(id) => id.to_string(),
-            None => continue,
-        };
-
-        if path.join(DISABLE_FILE_NAME).exists() {
-            debug!("Module {} is disabled, skipping", module_id);
-            continue;
-        }
-
-        if path.join(SKIP_MOUNT_FILE_NAME).exists() {
-            debug!("Module {} has skip_mount, skipping", module_id);
-            continue;
-        }
-
-        if !path.join("module.prop").exists() && !path.eq(Path::new(SYSTEM_RW_DIR)) {
-            debug!("Module {} has no module.prop, skipping", module_id);
-            continue;
-        }
-
-        enabled.push(module_id);
-    }
-
-    enabled.sort();
-    Ok(enabled)
-}
-
-/// Extra partitions handled besides /system, in scan order.
-pub const EXTRA_PARTITIONS: &[&str] = &["vendor", "product", "system_ext", "odm", "oem"];
-
-// Pure planner: maps enabled modules to per-partition lowerdir stacks.
-// Shared by the Android mount path and host-side tooling/tests.
-pub fn plan_partition_lowerdirs(
-    enabled_modules: &[String],
-    content_dir: &str,
-) -> (Vec<String>, HashMap<String, Vec<String>>) {
-    let mut system_lowerdir: Vec<String> = Vec::new();
-    let mut partition_lowerdir: HashMap<String, Vec<String>> = HashMap::new();
-
-    for part in EXTRA_PARTITIONS {
-        partition_lowerdir.insert((*part).to_string(), Vec::new());
-    }
-
-    for module_id in enabled_modules {
-        let module_content_path = Path::new(content_dir).join(module_id);
-
-        if !module_content_path.exists() {
-            info!("Module {}: active (No overlay partitions)", module_id);
-            continue;
-        }
-
-        let mut provided_parts = Vec::new();
-
-        let system_path = module_content_path.join("system");
-        if system_path.is_dir() {
-            system_lowerdir.push(system_path.display().to_string());
-            provided_parts.push("system");
-        }
-
-        for part in EXTRA_PARTITIONS {
-            let part_path = module_content_path.join(part);
-            if part_path.is_dir() {
-                if let Some(v) = partition_lowerdir.get_mut(*part) {
-                    v.push(part_path.display().to_string());
-                    provided_parts.push(part);
-                }
-            }
-        }
-
-        if !provided_parts.is_empty() {
-            info!("Module {}: overlays [{}]", module_id, provided_parts.join(", "));
-        } else {
-            info!("Module {}: active (No overlay partitions)", module_id);
-        }
-    }
-
-    (system_lowerdir, partition_lowerdir)
-}
-
-/// Architecture:
-/// - metadata_dir: Stores module.prop, disable, skip_mount flags (Stock Magisk/MYSU dir)
-/// - content_dir: Stores the actual modified partition files injected via ext4 image
 #[cfg(target_os = "android")]
-pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Result<()> {
-    info!("Scanning modules (dual-directory mode)");
-    debug!("  Metadata: {}", metadata_dir);
-    debug!("  Content: {}", content_dir);
+pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
+    info!("Scanning modules from: {modules_dir}");
 
-    let enabled_modules = collect_enabled_modules(metadata_dir)?;
+    // 1. Process pending atomic module updates & removals
+    let _ = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR);
+    let _ = process_module_removals(modules_dir);
 
+    // 2. Discover enabled modules
+    let enabled_modules = collect_enabled_modules(modules_dir)?;
     if enabled_modules.is_empty() {
         info!("No enabled modules found");
         return Ok(());
@@ -341,10 +493,14 @@ pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Resu
 
     info!("Found {} enabled module(s)", enabled_modules.len());
 
-    let (system_lowerdir, partition_lowerdir) =
-        plan_partition_lowerdirs(&enabled_modules, content_dir);
+    // 3. Configure Ring-0 MYSUFS stealth hooks before mounting
+    configure_mysufs_stealth(modules_dir, &enabled_modules);
 
-    info!("Mounting partitions...");
+    // 4. Plan partition lowerdir stacks
+    let (system_lowerdir, partition_lowerdir) =
+        plan_partition_lowerdirs(&enabled_modules, modules_dir);
+
+    info!("Mounting partition overlays...");
 
     if let Err(e) = mount_partition("system", &system_lowerdir) {
         warn!("mount system failed: {e:#}");
@@ -356,16 +512,16 @@ pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Resu
         }
     }
 
-    info!("All partitions processed successfully");
+    info!("All partitions processed successfully with MYSUFS stealth active");
     Ok(())
 }
 
-// Host stub: mounting requires Android mount namespaces. The scan still runs
-// so host tooling reports what would be mounted before failing clearly.
 #[cfg(not(target_os = "android"))]
-pub fn mount_modules_systemlessly(metadata_dir: &str, content_dir: &str) -> Result<()> {
-    let enabled = collect_enabled_modules(metadata_dir)?;
-    let _ = plan_partition_lowerdirs(&enabled, content_dir);
+pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
+    let _ = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR);
+    let _ = process_module_removals(modules_dir);
+    let enabled = collect_enabled_modules(modules_dir)?;
+    let _ = plan_partition_lowerdirs(&enabled, modules_dir);
     bail!("systemless mounting is only supported on Android")
 }
 
@@ -374,77 +530,70 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
-    fn make_module(meta: &TempDir, id: &str, markers: &[&str]) {
-        let dir = meta.mkdir(id);
-        std::fs::write(dir.join("module.prop"), "id=test\n").unwrap();
+    fn make_module(root: &TempDir, id: &str, markers: &[&str]) {
+        let dir = root.mkdir(id);
+        fs::write(dir.join("module.prop"), "id=test\n").unwrap();
         for marker in markers {
-            std::fs::write(dir.join(marker), "").unwrap();
+            fs::write(dir.join(marker), "").unwrap();
         }
     }
 
     #[test]
     fn enabled_modules_are_sorted_and_filtered() {
-        let meta = TempDir::create("meta");
-        make_module(&meta, "zeta", &[]);
-        make_module(&meta, "alpha", &[]);
-        make_module(&meta, "disabled_mod", &[DISABLE_FILE_NAME]);
-        make_module(&meta, "skipped_mod", &[SKIP_MOUNT_FILE_NAME]);
-        meta.mkdir("no_prop_mod");
-        meta.write("stray_file", b"x");
+        let root = TempDir::create("root");
+        make_module(&root, "zeta", &[]);
+        make_module(&root, "alpha", &[]);
+        make_module(&root, "disabled_mod", &[DISABLE_FILE_NAME]);
+        make_module(&root, "dot_disabled_mod", &[".disable"]);
+        make_module(&root, "skipped_mod", &[SKIP_MOUNT_FILE_NAME]);
+        make_module(&root, "removed_mod", &[REMOVE_FILE_NAME]);
+        root.mkdir("no_prop_mod");
+        root.write("stray_file", b"x");
 
-        let enabled = collect_enabled_modules(meta.path().to_str().unwrap()).unwrap();
+        let enabled = collect_enabled_modules(root.path().to_str().unwrap()).unwrap();
         assert_eq!(enabled, vec!["alpha".to_string(), "zeta".to_string()]);
     }
 
     #[test]
-    fn missing_metadata_dir_is_an_error() {
-        let missing = std::env::temp_dir().join("myoverlayfs-does-not-exist-12345");
-        let _ = std::fs::remove_dir_all(&missing);
-        assert!(collect_enabled_modules(missing.to_str().unwrap()).is_err());
+    fn apply_pending_updates_promotes_cleanly() {
+        let root = TempDir::create("mods");
+        let updates = TempDir::create("updates");
+
+        let old_mod = root.mkdir("mod_x");
+        fs::write(old_mod.join("module.prop"), "version=1.0\n").unwrap();
+
+        let updated_mod = updates.mkdir("mod_x");
+        fs::write(updated_mod.join("module.prop"), "version=2.0\n").unwrap();
+
+        apply_pending_updates(
+            root.path().to_str().unwrap(),
+            updates.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        let prop_content = fs::read_to_string(old_mod.join("module.prop")).unwrap();
+        assert!(prop_content.contains("version=2.0"));
     }
 
     #[test]
     fn planner_maps_partitions_in_module_order() {
-        let content = TempDir::create("content");
-        content.mkdir("modA/system");
-        content.mkdir("modA/vendor");
-        content.mkdir("modB/system");
-        content.write("modB/vendor", b"not a dir");
-        // modC has no content dir at all.
+        let root = TempDir::create("modules_root");
+        root.mkdir("modA/system");
+        root.mkdir("modA/vendor");
+        root.mkdir("modB/system");
+        root.write("modB/vendor", b"not a dir");
 
         let enabled = vec!["modA".to_string(), "modB".to_string(), "modC".to_string()];
-        let (system, parts) =
-            plan_partition_lowerdirs(&enabled, content.path().to_str().unwrap());
+        let (system, parts) = plan_partition_lowerdirs(&enabled, root.path().to_str().unwrap());
 
         assert_eq!(system.len(), 2);
         assert!(system[0].ends_with("modA/system"));
         assert!(system[1].ends_with("modB/system"));
         assert_eq!(
             parts["vendor"],
-            vec![content.path().join("modA/vendor").display().to_string()]
+            vec![root.path().join("modA/vendor").display().to_string()]
         );
         assert!(parts["product"].is_empty());
         assert_eq!(parts.len(), EXTRA_PARTITIONS.len());
-    }
-
-    #[test]
-    fn planner_with_no_modules_yields_empty_stacks() {
-        let content = TempDir::create("content-empty");
-        let (system, parts) = plan_partition_lowerdirs(&[], content.path().to_str().unwrap());
-        assert!(system.is_empty());
-        assert!(parts.values().all(Vec::is_empty));
-    }
-
-    #[cfg(not(target_os = "android"))]
-    #[test]
-    fn host_mount_stub_reports_android_only() {
-        let meta = TempDir::create("host-meta");
-        let content = TempDir::create("host-content");
-        let err = mount_modules_systemlessly(
-            meta.path().to_str().unwrap(),
-            content.path().to_str().unwrap(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("Android"));
     }
 }

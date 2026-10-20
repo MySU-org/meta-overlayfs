@@ -1,21 +1,26 @@
-// Constants for KernelSU module mounting
+// Author: kelexine <https://github.com/kelexine>
+// Date: 2026-10-19
+// Purpose: Core directory and status constants for MyOverlayFS
 
-// Dual-directory support for ext4 image
+// Module storage directories
+pub const MODULES_DIR: &str = "/data/adb/modules/";
+#[allow(dead_code)]
 pub const MODULE_METADATA_DIR: &str = "/data/adb/modules/";
-pub const MODULE_CONTENT_DIR: &str = "/data/adb/metamodule/mnt/";
-
-// Legacy constant (for backwards compatibility)
-pub const _MODULE_DIR: &str = "/data/adb/modules/";
+pub const MODULE_UPDATES_DIR: &str = "/data/adb/modules_update/";
+#[allow(dead_code)]
+pub const METAMODULE_DIR: &str = "/data/adb/metamodule/";
 
 // Status marker files
 pub const DISABLE_FILE_NAME: &str = "disable";
-pub const _REMOVE_FILE_NAME: &str = "remove";
+pub const REMOVE_FILE_NAME: &str = "remove";
 pub const SKIP_MOUNT_FILE_NAME: &str = "skip_mount";
+#[allow(dead_code)]
+pub const UPDATE_FILE_NAME: &str = "update";
 
 // System directories
 pub const SYSTEM_RW_DIR: &str = "/data/adb/modules/.rw/";
+
 // Consumed by the Android mount path; unused on host builds.
-// Test-only reads below keep it covered everywhere.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub const MYSU_OVERLAY_SOURCE: &str = "MYSU";
 
@@ -25,8 +30,9 @@ mod tests {
 
     #[test]
     fn constants_are_sane() {
+        assert!(MODULES_DIR.starts_with('/'));
         assert!(MODULE_METADATA_DIR.starts_with('/'));
-        assert!(MODULE_CONTENT_DIR.starts_with('/'));
+        assert!(MODULE_UPDATES_DIR.starts_with('/'));
         assert!(!MYSU_OVERLAY_SOURCE.is_empty());
         assert!(!DISABLE_FILE_NAME.is_empty());
         assert!(!SKIP_MOUNT_FILE_NAME.is_empty());

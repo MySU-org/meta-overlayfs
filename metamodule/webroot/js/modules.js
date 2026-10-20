@@ -92,10 +92,7 @@ export default class ModulesPage {
         if (this.loading) return;
         this.loading = true;
         try {
-            const utils = this.app.utils;
-            const mounted = await utils.execCommand(`mountpoint -q "${CONFIG.MNT_DIR}" && echo "1"`).then(() => true).catch(() => false);
-            if (!mounted) { this.modules = []; return; }
-            const cmd = `sizes=$(du -sk "${CONFIG.MODULES_DIR}"/* 2>/dev/null); ls -1 "${CONFIG.MNT_DIR}" 2>/dev/null | grep -v 'lost+found' | grep -v '_update$' | while read -r id; do [ -z "$id" ] && continue; p="${CONFIG.MODULES_DIR}/$id"; name=$(grep "^name=" "$p/module.prop" 2>/dev/null | cut -d'=' -f2-); exists=$([ -d "$p" ] && echo "1" || echo "0"); upd=$([ -f "$p/update" ] && echo "1" || echo "0"); rmv=$([ -f "$p/remove" ] && echo "1" || echo "0"); dis=$([ -f "$p/disable" ] && echo "1" || echo "0"); size=0; if [ "$exists" = "1" ]; then size=$(echo "$sizes" | grep -w "$p" | awk '{print $1}'); fi; echo "$id|__NAME__|$name|__STAT__|$exists|$upd|$rmv|$dis|$size"; done`;
+            const cmd = `sizes=$(du -sk "${CONFIG.MODULES_DIR}"/* 2>/dev/null); ls -1 "${CONFIG.MODULES_DIR}" 2>/dev/null | grep -v 'lost+found' | grep -v '_update$' | while read -r id; do [ -z "$id" ] && continue; p="${CONFIG.MODULES_DIR}/$id"; [ ! -d "$p" ] && continue; name=$(grep "^name=" "$p/module.prop" 2>/dev/null | cut -d'=' -f2-); upd=$([ -f "$p/update" ] && echo "1" || echo "0"); rmv=$([ -f "$p/remove" ] && echo "1" || echo "0"); dis=$([ -f "$p/disable" ] || [ -f "$p/.disable" ] && echo "1" || echo "0"); size=$(echo "$sizes" | grep -w "$p" | awk '{print $1}'); [ -z "$size" ] && size=0; echo "$id|__NAME__|$name|__STAT__|1|$upd|$rmv|$dis|$size"; done`;
             const out = await utils.execCommand(cmd);
             if (!out) return [];
             const modules = [];

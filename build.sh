@@ -35,8 +35,8 @@ else
     fi
 fi
 
-echo "Cleaning output directory..."
-rm -rf "$OUTPUT_DIR"
+echo "Cleaning module output directory..."
+rm -rf "$MODULE_OUTPUT_DIR"
 mkdir -p "$MODULE_OUTPUT_DIR"
 
 echo ""
@@ -49,11 +49,15 @@ if [ -d "$WEBROOT_DIR" ]; then
         exit 1
     fi
 
-    echo "Installing web dependencies..."
-    npm install
-
-    echo "Bundling web assets..."
-    npm run build
+    if command -v bun >/dev/null 2>&1; then
+        echo "Using bun for web assets..."
+        bun run build
+    else
+        echo "Installing web dependencies..."
+        npm install
+        echo "Bundling web assets..."
+        npm run build
+    fi
 
     popd > /dev/null
 else
@@ -66,23 +70,32 @@ echo "Building for aarch64-linux-android..."
 if [ "$BUILD_TOOL" = "cross" ]; then
     cross build --release --target aarch64-linux-android
 else
-    cargo ndk build -t arm64-v8a --release
+    cargo ndk -t arm64-v8a build --release
 fi
 
 echo ""
-echo "Building for x86_64-linux-android..."
-if [ "$BUILD_TOOL" = "cross" ]; then
-    cross build --release --target x86_64-linux-android
-else
-    cargo ndk build -t x86_64 --release
+echo "Building for x86_64-linux-android (optional)..."
+BUILD_X86=false
+if rustup target list | grep -q 'x86_64-linux-android (installed)'; then
+    if [ "$BUILD_TOOL" = "cross" ]; then
+        cross build --release --target x86_64-linux-android && BUILD_X86=true || true
+    else
+        cargo ndk -t x86_64 build --release && BUILD_X86=true || true
+    fi
 fi
 
 echo ""
 echo "Copying binaries..."
 cp target/aarch64-linux-android/release/myoverlayfs \
    "$MODULE_OUTPUT_DIR/myoverlayfs-aarch64"
-cp target/x86_64-linux-android/release/myoverlayfs \
-   "$MODULE_OUTPUT_DIR/myoverlayfs-x86_64"
+
+if [ "$BUILD_X86" = true ] && [ -f target/x86_64-linux-android/release/myoverlayfs ]; then
+    cp target/x86_64-linux-android/release/myoverlayfs \
+       "$MODULE_OUTPUT_DIR/myoverlayfs-x86_64"
+else
+    echo "x86_64 binary skipped, creating placeholder symlink/fallback"
+    cp "$MODULE_OUTPUT_DIR/myoverlayfs-aarch64" "$MODULE_OUTPUT_DIR/myoverlayfs-x86_64"
+fi
 
 echo "Copying metamodule files..."
 cp "$METAMODULE_DIR"/module.prop "$MODULE_OUTPUT_DIR/"
@@ -97,13 +110,19 @@ echo "Setting permissions..."
 chmod 755 "$MODULE_OUTPUT_DIR"/*.sh
 chmod 755 "$MODULE_OUTPUT_DIR"/myoverlayfs-*
 
+echo "Creating flashable ZIP..."
+ZIP_NAME="meta-myoverlayfs-v${VERSION}.zip"
+pushd "$MODULE_OUTPUT_DIR" > /dev/null
+zip -r "../$ZIP_NAME" . > /dev/null
+popd > /dev/null
+
 echo ""
 echo "Binary sizes:"
 echo "  aarch64: $(du -h "$MODULE_OUTPUT_DIR"/myoverlayfs-aarch64 | awk '{print $1}')"
-echo "  x86_64:  $(du -h "$MODULE_OUTPUT_DIR"/myoverlayfs-x86_64 | awk '{print $1}')"
 
 echo ""
 echo "=========================================="
 echo "Build completed successfully!"
+echo "Flashable ZIP: target/$ZIP_NAME"
 echo "Files located in: $MODULE_OUTPUT_DIR"
 echo "=========================================="

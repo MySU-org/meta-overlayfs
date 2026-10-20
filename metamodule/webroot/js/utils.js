@@ -28,31 +28,18 @@ export default class Utils {
 
     static async updateRootStatus() {}
 
-    static async getStorageUsage(imgFile, mntDir) {
+    static async getStorageUsage() {
         try {
-            const [mounted, exists] = await Promise.all([
-                this.execCommand(`mountpoint -q "${mntDir}" && echo "1"`).then(() => true).catch(() => false),
-                this.execCommand(`[ -f "${imgFile}" ] && echo "1"`).then(() => true).catch(() => false),
-            ]);
-
-            const base = { used: 0, total: 0, free: 0, percent: 0,
-                usedFormatted: '0 B', totalFormatted: '0 B', freeFormatted: '0 B', mounted, exists };
-
-            if (!exists) return base;
-
-            const imgSize = await this.execCommand(`stat -c%s "${imgFile}" 2>/dev/null`).catch(() => '0');
-            const total = parseInt(imgSize) || 0;
+            const df = await this.execCommand('df -k "/data" 2>/dev/null | tail -1').catch(() => '');
+            const parts = df.trim().split(/\s+/);
+            let total = 0;
             let used = 0;
-
-            if (mounted) {
-                const df = await this.execCommand(`df -k "${mntDir}" 2>/dev/null | tail -1`).catch(() => '');
-                const parts = df.trim().split(/\s+/);
-                if (parts.length >= 3) used = (parseInt(parts[2]) || 0) * 1024;
-            } else {
-                used = Math.round(total * 0.11);
+            let free = 0;
+            if (parts.length >= 4) {
+                total = (parseInt(parts[1]) || 0) * 1024;
+                used  = (parseInt(parts[2]) || 0) * 1024;
+                free  = (parseInt(parts[3]) || 0) * 1024;
             }
-
-            const free    = total - used;
             const percent = total > 0 ? Math.round((used / total) * 100) : 0;
 
             return {
@@ -60,12 +47,28 @@ export default class Utils {
                 usedFormatted:  this.formatBytes(used),
                 totalFormatted: this.formatBytes(total),
                 freeFormatted:  this.formatBytes(free),
-                mounted, exists
+                mounted: true, exists: true
             };
         } catch {
             return { used: 0, total: 0, free: 0, percent: 0,
-                usedFormatted: 'Error', totalFormatted: 'Error', freeFormatted: 'Error',
-                mounted: false, exists: false };
+                usedFormatted: '0 B', totalFormatted: '0 B', freeFormatted: '0 B',
+                mounted: true, exists: true };
+        }
+    }
+
+    static async getStealthInfo() {
+        try {
+            const out = await this.execCommand(`${window.CONFIG.BINARY} stealth 2>/dev/null`);
+            const isEnabled = out.includes("MYSUFS Stealth: ENABLED");
+            const verMatch = out.match(/Version:\s+(\S+)/);
+            const varMatch = out.match(/Variant:\s+(\S+)/);
+            return {
+                enabled: isEnabled,
+                version: verMatch ? verMatch[1] : 'N/A',
+                variant: varMatch ? varMatch[1] : 'Standard'
+            };
+        } catch {
+            return { enabled: false, version: 'N/A', variant: 'Standard' };
         }
     }
 

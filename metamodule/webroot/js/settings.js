@@ -2,12 +2,9 @@ export default class SettingsPage {
     constructor(app) {
         this.app = app;
         this.data = {
-            exists: false,
-            mounted: false,
-            imageSize: '—',
-            imageUsage: '—',
-            imageStatus: { mounted: false, exists: false },
-            moduleId: 'myoverlayfs',
+            stealth: { enabled: false, version: 'N/A', variant: 'Standard' },
+            storageUsage: '—',
+            moduleId: 'meta-myoverlayfs',
             removePending: false
         };
     }
@@ -18,86 +15,79 @@ export default class SettingsPage {
     }
 
     buildHTML() {
-        const { imageStatus, imageSize, imageUsage, removePending } = this.data;
-        const mountVal = imageStatus.mounted ? 'Mounted'   : (imageStatus.exists ? 'Unmounted' : 'No Image');
-        const mountCls = imageStatus.mounted ? 'ok'        : (imageStatus.exists ? 'warn'       : 'bad');
+        const { stealth, storageUsage, removePending } = this.data;
+        const stealthCls = stealth.enabled ? 'text-green' : 'text-yellow';
+        const stealthVal = stealth.enabled ? 'MYSUFS Engaged' : 'Standard Fallback';
 
         return `
         <div class="settings-page">
             <div class="s-plane">
                 <div class="s-plane-head">
                     <div class="s-plane-icon icon-blue">
-                        ${this.app.icon('hdd')}
+                        ${this.app.icon('sliders')}
                     </div>
-                    <div class="s-plane-title">Image Configuration</div>
+                    <div class="s-plane-title">Engine Configuration</div>
                 </div>
                 <div class="s-row">
-                    <div class="s-row-icon icon-blue">
-                        ${this.app.icon('hdd')}
+                    <div class="s-row-icon icon-green">
+                        ${this.app.icon('shield')}
                     </div>
                     <div class="s-row-body">
-                        <div class="s-row-label">Status</div>
-                        <div class="s-row-sub">Overlay filesystem mount state</div>
+                        <div class="s-row-label">Stealth Subsystem</div>
+                        <div class="s-row-sub">Ring-0 VFS Interception & Stat Spoofing</div>
                     </div>
-                    <span class="s-row-value ${mountCls}" id="settings-mount-status">${mountVal}</span>
+                    <span class="s-row-value ${stealthCls}" id="settings-stealth-status">${stealthVal}</span>
                 </div>
                 <div class="s-row">
                     <div class="s-row-icon icon-violet">
                         ${this.app.icon('layer-group')}
                     </div>
                     <div class="s-row-body">
-                        <div class="s-row-label">Image Size</div>
-                        <div class="s-row-sub">Allocated space for modules</div>
+                        <div class="s-row-label">Architecture</div>
+                        <div class="s-row-sub">Single-directory native OverlayFS</div>
                     </div>
-                    <span class="s-row-value" id="settings-image-size">${imageSize}</span>
+                    <span class="s-row-value">Direct (/data)</span>
                 </div>
                 <div class="s-row border-none">
-                    <div class="s-row-icon icon-green">
-                        ${this.app.icon('compress')}
+                    <div class="s-row-icon icon-cyan">
+                        ${this.app.icon('hdd')}
                     </div>
                     <div class="s-row-body">
                         <div class="s-row-label">Storage Usage</div>
-                        <div class="s-row-sub">Used / Total</div>
+                        <div class="s-row-sub">Used / Total (/data partition)</div>
                     </div>
-                    <span class="s-row-value" id="settings-usage">${imageUsage}</span>
+                    <span class="s-row-value" id="settings-usage">${storageUsage}</span>
                 </div>
             </div>
 
-            ${imageStatus.mounted ? `
             <div class="s-plane">
                 <div class="s-plane-head">
                     <div class="s-plane-icon icon-green">
-                        ${this.app.icon('compress')}
+                        ${this.app.icon('terminal')}
                     </div>
-                    <div class="s-plane-title">Storage</div>
+                    <div class="s-plane-title">Engine Tools</div>
                 </div>
                 <div class="s-row-static border-none pb-4">
                     <div class="s-row-body">
-                        <div class="s-row-label-desc">Compacts the myoverlayfs image file to reclaim empty space left behind by deleted or updated modules.</div>
+                        <div class="s-row-label-desc">Verify Ring-0 stealth status or re-evaluate overlay mounts.</div>
                     </div>
                 </div>
                 <div class="s-actions pt-6">
-                    <button class="s-btn primary full" id="optimize-image" ${this.data.mounted ? '' : 'disabled'}>
-                        ${this.app.icon('compress')} Optimize Storage
+                    <button class="s-btn primary full" id="verify-stealth">
+                        ${this.app.icon('shield')} Verify Stealth Status
+                    </button>
+                    <button class="s-btn full" id="remount-overlays">
+                        ${this.app.icon('sync')} Remount Overlays
                     </button>
                 </div>
             </div>
-            ` : ''}
 
             <div class="s-plane">
                 <div class="s-plane-head">
-                    <div class="s-plane-icon icon-violet">
-                        ${this.app.icon('file-alt')}
+                    <div class="s-plane-icon icon-yellow">
+                        ${this.app.icon('file-text')}
                     </div>
-                    <div class="s-plane-title">System Logs</div>
-                </div>
-                <div class="s-row-static border-none">
-                    <div class="s-row-icon icon-gray">
-                        ${this.app.icon('code')}
-                    </div>
-                    <div class="s-row-body">
-                        <div class="s-row-label">Log File</div>
-                    </div>
+                    <div class="s-plane-title">Log File</div>
                 </div>
                 <div class="path-box">
                     <span class="path-box-text">${CONFIG.LOG_FILE}</span>
@@ -123,10 +113,9 @@ export default class SettingsPage {
                     <div class="s-plane-title">Paths</div>
                 </div>
                 ${[
-                    { label: 'Image File',  path: CONFIG.IMG_FILE },
-                    { label: 'Mount Point', path: CONFIG.MNT_DIR },
-                    { label: 'Modules Dir', path: CONFIG.MODULES_DIR },
-                    { label: 'Binary',      path: CONFIG.BINARY },
+                    { label: 'Modules Directory', path: CONFIG.MODULES_DIR },
+                    { label: 'Log File',          path: CONFIG.LOG_FILE },
+                    { label: 'Engine Binary',     path: CONFIG.BINARY },
                 ].map(item => `
                     <div class="s-row-static">
                         <div class="s-row-body">
@@ -142,27 +131,25 @@ export default class SettingsPage {
                 `).join('')}
             </div>
 
-            <div class="s-plane ${removePending ? '' : 'danger'}" id="meta-uninstall-plane">
+            <div class="s-plane">
                 <div class="s-plane-head">
-                    <div class="s-plane-icon ${removePending ? 'icon-green' : 'icon-red'}" id="meta-uninstall-icon">
-                        ${this.app.icon(removePending ? 'undo' : 'trash')}
+                    <div class="s-plane-icon icon-red">
+                        ${this.app.icon('trash')}
                     </div>
-                    <div class="s-plane-title ${removePending ? 'text-green' : 'text-red-dim'}" id="meta-uninstall-title">
-                        ${removePending ? 'Restore Meta OverlayFS' : 'Uninstall Meta OverlayFS'}
-                    </div>
+                    <div class="s-plane-title">Metamodule Management</div>
                 </div>
                 <div class="s-row-static border-none pb-4">
                     <div class="s-row-body">
-                        <div class="s-row-label-desc" id="meta-uninstall-desc">
-                            ${removePending
-                                ? 'The core module is queued for removal. Restore it to cancel the uninstallation.'
-                                : 'Mark the core Meta OverlayFS module for removal. This disables the entire overlay system on next reboot.'}
+                        <div class="s-row-label-desc">
+                            ${removePending 
+                                ? 'MyOverlayFS is scheduled for removal on next reboot.'
+                                : 'Queue MyOverlayFS for removal on next reboot.'}
                         </div>
                     </div>
                 </div>
                 <div class="s-actions pt-6">
-                    <button class="s-btn ${removePending ? 'success' : 'danger'} full" id="uninstall-meta-btn">
-                        ${this.app.icon(removePending ? 'undo' : 'trash')} <span id="meta-uninstall-btn-txt">${removePending ? 'Cancel Uninstall' : 'Uninstall Meta OverlayFS'}</span>
+                    <button class="s-btn ${removePending ? 'primary' : 'danger'} full" id="uninstall-module">
+                        ${this.app.icon(removePending ? 'undo' : 'trash')} ${removePending ? 'Cancel Removal' : 'Uninstall MyOverlayFS'}
                     </button>
                 </div>
             </div>
@@ -171,12 +158,12 @@ export default class SettingsPage {
     }
 
     async getModuleId() {
-        let moduleId = 'myoverlayfs';
+        let moduleId = 'meta-myoverlayfs';
         try {
-            if (typeof mysu !== 'undefined' && typeof mysu.moduleInfo === 'function') {
-                const info = mysu.moduleInfo();
-                const parsedInfo = typeof info === 'string' ? JSON.parse(info) : info;
-                if (parsedInfo && parsedInfo.id) {
+            const rawInfo = await this.app.utils.execCommand(`${CONFIG.BINARY} inspect -r 2>/dev/null`);
+            if (rawInfo) {
+                const parsedInfo = JSON.parse(rawInfo);
+                if (parsedInfo.id) {
                     moduleId = parsedInfo.id;
                 }
             }
@@ -187,26 +174,26 @@ export default class SettingsPage {
     async loadData() {
         try {
             const utils = this.app.utils;
-            const usage = await utils.getStorageUsage(CONFIG.IMG_FILE, CONFIG.MNT_DIR);
-            const moduleId = await this.getModuleId();
+            const [usage, stealth, moduleId] = await Promise.all([
+                utils.getStorageUsage(),
+                utils.getStealthInfo(),
+                this.getModuleId()
+            ]);
+
             const targetPath = `${CONFIG.MODULES_DIR}/${moduleId}/remove`;
             const removePending = await utils.execCommand(`[ -f "${targetPath}" ] && echo "1"`).then(() => true).catch(() => false);
 
             this.data = {
-                exists: usage.exists,
-                mounted: usage.mounted,
-                imageSize: usage.totalFormatted,
-                imageUsage: `${usage.usedFormatted} / ${usage.totalFormatted} (${usage.percent}%)`,
-                imageStatus: { mounted: usage.mounted, exists: usage.exists },
+                stealth,
+                storageUsage: `${usage.usedFormatted} / ${usage.totalFormatted} (${usage.percent}%)`,
                 moduleId,
                 removePending
             };
         } catch {
             this.data = {
-                exists: false, mounted: false,
-                imageSize: 'Error', imageUsage: 'Error',
-                imageStatus: { mounted: false, exists: false },
-                moduleId: 'myoverlayfs',
+                stealth: { enabled: false, version: 'N/A', variant: 'Standard' },
+                storageUsage: 'Error',
+                moduleId: 'meta-myoverlayfs',
                 removePending: false
             };
         }
@@ -218,97 +205,109 @@ export default class SettingsPage {
         }[tag]));
     }
 
-    formatLogs(raw) {
-        if (!raw || raw === 'No logs available') return raw;
-        return raw.split('\n').map(line => {
-            const safeLine = this.escapeHTML(line);
-            if (safeLine.includes('[WARN ')) return `<span class="log-warn">${safeLine}</span>`;
-            if (safeLine.includes('[ERROR ')) return `<span class="log-err">${safeLine}</span>`;
-            if (safeLine.includes('[INFO ')) return `<span class="log-info">${safeLine}</span>`;
-            return safeLine;
-        }).join('\n');
+    bindEvents() {
+        const root = document.getElementById('page-content');
+        if (!root) return;
+
+        root.addEventListener('click', async (e) => {
+            const copyBtn = e.target.closest('.path-copy');
+            if (copyBtn) {
+                const text = copyBtn.getAttribute('data-copy');
+                if (text) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        this.app.utils.showToast('Path copied to clipboard', 'success');
+                    } catch {
+                        this.app.utils.showToast('Failed to copy path', 'error');
+                    }
+                }
+                return;
+            }
+
+            const uninstallBtn = e.target.closest('#uninstall-module');
+            if (uninstallBtn) {
+                await this.handleUninstallToggle();
+                return;
+            }
+
+            const verifyBtn = e.target.closest('#verify-stealth');
+            if (verifyBtn) {
+                await this.verifyStealth();
+                return;
+            }
+
+            const remountBtn = e.target.closest('#remount-overlays');
+            if (remountBtn) {
+                await this.remountOverlays(remountBtn);
+                return;
+            }
+
+            const viewLogsBtn = e.target.closest('#view-logs');
+            if (viewLogsBtn) {
+                await this.viewLogs();
+                return;
+            }
+
+            const clearLogsBtn = e.target.closest('#clear-logs');
+            if (clearLogsBtn) {
+                await this.clearLogs();
+            }
+        });
     }
 
-    async bindEvents() {
-        document.getElementById('view-logs')?.addEventListener('click', () => this.viewLogs());
-        document.getElementById('clear-logs')?.addEventListener('click', async () => {
-            const ok = await this.app.utils.confirmAction('Clear Logs', 'Delete all log entries? This cannot be undone.', 'Clear');
-            if (ok) await this.clearLogs();
-        });
-
-        document.getElementById('optimize-image')?.addEventListener('click', e => this.optimizeStorage(e.currentTarget));
-        document.getElementById('uninstall-meta-btn')?.addEventListener('click', () => this.uninstallMetaModule());
-
-        document.querySelectorAll('.path-copy').forEach(btn => {
-            btn.addEventListener('click', async e => {
-                e.stopPropagation();
-                await this.app.utils.copyToClipboard(btn.dataset.copy);
-            });
-        });
-    }
-
-    async uninstallMetaModule() {
-        const { moduleId, removePending } = this.data;
-        const targetPath = `${CONFIG.MODULES_DIR}/${moduleId}/remove`;
-
-        if (removePending) {
+    async handleUninstallToggle() {
+        const targetPath = `${CONFIG.MODULES_DIR}/${this.data.moduleId}/remove`;
+        if (this.data.removePending) {
             try {
                 await this.app.utils.execCommand(`rm -f "${targetPath}"`);
-                this.app.utils.showToast(`Meta OverlayFS restored`, 'success');
+                this.app.utils.showToast('Uninstallation canceled', 'info');
                 await this.update();
             } catch (err) {
-                this.app.utils.logToFile(`Restoration failed: ${err.message}`, 'ERROR');
                 this.app.utils.showToast(`Failed: ${err.message}`, 'error');
             }
         } else {
             const ok = await this.app.utils.confirmAction(
-                'Confirm Uninstall',
-                `Are you sure you want to uninstall the core <strong>Meta OverlayFS</strong> module?<br><br>
-                 The overlay system will be completely disabled and removed on your next reboot.`,
-                'Yes, Uninstall'
+                'Uninstall MyOverlayFS',
+                'Are you sure you want to uninstall MyOverlayFS? Overlay modifications will be disabled on next reboot.<br><br><strong>Reboot required</strong> to finalize.',
+                'Uninstall'
             );
 
             if (!ok) return;
 
             try {
                 await this.app.utils.execCommand(`touch "${targetPath}"`);
-                this.app.utils.showToast(`Meta OverlayFS queued for removal on reboot`, 'success');
+                this.app.utils.showToast(`MyOverlayFS queued for removal on reboot`, 'success');
                 await this.update();
             } catch (err) {
-                this.app.utils.logToFile(`Uninstall trigger failure: ${err.message}`, 'ERROR');
                 this.app.utils.showToast(`Failed: ${err.message}`, 'error');
             }
         }
     }
 
-    async optimizeStorage(btn) {
-        const ok = await this.app.utils.confirmAction(
-            'Optimize Storage',
-            'Compact the modules image to reclaim unused space. This creates a temporary copy and may take a minute.<br><br><strong>Reboot required</strong> for size changes to appear in file managers.',
-            'Optimize'
-        );
-        if (!ok) return;
+    async verifyStealth() {
+        try {
+            const out = await this.app.utils.execCommand(`${CONFIG.BINARY} stealth 2>&1 || echo "Command failed"`);
+            await this.app.utils.showModal(
+                'MYSUFS Stealth Status',
+                `<div class="log-content-body"><pre>${this.escapeHTML(out)}</pre></div>`,
+                [{ label: 'Close', class: 'primary', onClick: () => {} }]
+            );
+        } catch (err) {
+            this.app.utils.showToast(`Check failed: ${err.message}`, 'error');
+        }
+    }
 
+    async remountOverlays(btn) {
         const orig = btn.innerHTML;
-        btn.innerHTML = `${this.app.icon('spinner', 'fa-spin')} Optimizing...`;
+        btn.innerHTML = `${this.app.icon('spinner', 'fa-spin')} Remounting...`;
         btn.disabled = true;
 
         try {
-            this.app.utils.showToast('Starting storage optimization', 'info');
-            const cmd = `
-                dd if=/dev/zero of="${CONFIG.MNT_DIR}/zero.fill" bs=1M 2>/dev/null
-                rm -f "${CONFIG.MNT_DIR}/zero.fill"
-                "${CONFIG.BINARY}" xcp "${CONFIG.IMG_FILE}" "${CONFIG.IMG_FILE}.new" --punch-hole
-                mv "${CONFIG.IMG_FILE}.new" "${CONFIG.IMG_FILE}"
-                chmod 644 "${CONFIG.IMG_FILE}"
-                chcon u:object_r:mysu_file:s0 "${CONFIG.IMG_FILE}"
-            `;
-            await this.app.utils.execCommand(cmd);
-            this.app.utils.showToast('Storage optimized! Reboot to apply changes.', 'success');
+            await this.app.utils.execCommand(`${CONFIG.BINARY} 2>&1`);
+            this.app.utils.showToast('Overlays remounted successfully', 'success');
             await this.update();
         } catch (err) {
-            this.app.utils.logToFile(`Optimization engine failure: ${err.message}`, 'ERROR');
-            this.app.utils.showToast(`Optimization failed: ${err.message}`, 'error');
+            this.app.utils.showToast(`Remount failed: ${err.message}`, 'error');
         } finally {
             btn.innerHTML = orig;
             btn.disabled = false;
@@ -320,7 +319,7 @@ export default class SettingsPage {
             const logs = await this.app.utils.execCommand(`cat "${CONFIG.LOG_FILE}" 2>/dev/null || echo "No logs available"`);
             const formattedLogs = this.formatLogs(logs);
 
-            const promise = this.app.utils.showModal(
+            this.app.utils.showModal(
                 'System Logs',
                 `
                 <div class="log-viewer-modal">
@@ -328,55 +327,78 @@ export default class SettingsPage {
                         <button class="s-btn" id="refresh-logs">${this.app.icon('sync')} Refresh</button>
                         <button class="s-btn" id="copy-logs">${this.app.icon('copy')} Copy</button>
                     </div>
-                    <div class="log-content"><pre id="log-content">${formattedLogs}</pre></div>
+                    <div class="log-content-body" id="log-body">
+                        ${formattedLogs}
+                    </div>
                 </div>
                 `,
-                [{ text: 'Close', type: 'secondary', result: 'close' }]
+                [{ label: 'Close', class: 'primary', onClick: () => {} }]
             );
 
             setTimeout(() => {
-                document.getElementById('refresh-logs')?.addEventListener('click', async e => {
-                    e.stopPropagation();
-                    const btn = e.currentTarget;
-                    const orig = btn.innerHTML;
-                    btn.innerHTML = `${this.app.icon('spinner', 'fa-spin')} Refreshing`;
-                    btn.disabled = true;
-                    try {
+                const modal = document.querySelector('.modal');
+                if (!modal) return;
+
+                const refreshBtn = modal.querySelector('#refresh-logs');
+                if (refreshBtn) {
+                    refreshBtn.addEventListener('click', async () => {
                         const newLogs = await this.app.utils.execCommand(`cat "${CONFIG.LOG_FILE}" 2>/dev/null || echo "No logs available"`);
-                        const pre = document.getElementById('log-content');
-                        if (pre) pre.innerHTML = this.formatLogs(newLogs);
-                        this.app.utils.showToast('Refreshed log view', 'success');
-                    } catch { this.app.utils.showToast('Refresh failed', 'error'); }
-                    btn.innerHTML = orig;
-                    btn.disabled = false;
-                });
+                        const body = modal.querySelector('#log-body');
+                        if (body) body.innerHTML = this.formatLogs(newLogs);
+                        this.app.utils.showToast('Logs refreshed', 'info');
+                    });
+                }
 
-                document.getElementById('copy-logs')?.addEventListener('click', async e => {
-                    e.stopPropagation();
-                    const pre = document.getElementById('log-content');
-                    if (pre) await this.app.utils.copyToClipboard(pre.innerText);
-                });
-            }, 100);
-
-            await promise;
+                const copyBtn = modal.querySelector('#copy-logs');
+                if (copyBtn) {
+                    copyBtn.addEventListener('click', async () => {
+                        try {
+                            await navigator.clipboard.writeText(logs);
+                            this.app.utils.showToast('Logs copied to clipboard', 'success');
+                        } catch {
+                            this.app.utils.showToast('Failed to copy logs', 'error');
+                        }
+                    });
+                }
+            }, 50);
         } catch (err) {
             this.app.utils.showToast(`Failed to read logs: ${err.message}`, 'error');
         }
     }
 
     async clearLogs() {
+        const ok = await this.app.utils.confirmAction(
+            'Clear Logs',
+            'Are you sure you want to truncate the system log file?',
+            'Clear'
+        );
+        if (!ok) return;
+
         try {
             await this.app.utils.execCommand(`> "${CONFIG.LOG_FILE}"`);
-            this.app.utils.showToast('System logs cleared', 'success');
+            this.app.utils.showToast('Logs cleared', 'success');
         } catch (err) {
-            this.app.utils.showToast(`Failed: ${err.message}`, 'error');
+            this.app.utils.showToast(`Failed to clear logs: ${err.message}`, 'error');
         }
     }
 
+    formatLogs(rawLogs) {
+        if (!rawLogs.trim()) return '<div class="log-empty">No logs recorded yet.</div>';
+
+        return rawLogs.split('\n').map(line => {
+            if (!line.trim()) return '';
+            let levelClass = 'log-info';
+            if (line.includes('[ERROR') || line.includes('ERROR:')) levelClass = 'log-error';
+            else if (line.includes('[WARN') || line.includes('WARN:')) levelClass = 'log-warn';
+            else if (line.includes('[DEBUG') || line.includes('DEBUG:')) levelClass = 'log-debug';
+
+            return `<div class="log-line ${levelClass}">${this.escapeHTML(line)}</div>`;
+        }).join('');
+    }
+
     async update() {
-        await this.loadData();
+        const html = await this.render();
         const content = document.getElementById('page-content');
-        if (content) content.innerHTML = this.buildHTML();
-        await this.bindEvents();
+        if (content) content.innerHTML = html;
     }
 }
