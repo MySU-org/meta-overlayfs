@@ -7,41 +7,41 @@
 
 </div>
 
-**MyOverlayFs** is an advanced evolution of the original KernelSU overlayfs metamodule. It introduces a modern WebUI, robust image management, and a real-time kernel mount inspector to handle modules efficiently using an ext4 image overlay.
+**MyOverlayFs** is a next-generation OverlayFS metamodule designed exclusively for **MySU**. It completely eliminates virtual ext4 loop images and sparse storage overhead by mounting directly from `/data/adb/modules/`, while integrating deeply with MySU's Ring-0 **MYSUFS** kernel stealth engine to hide mounts, spoof stock OEM file kstats, and defeat anti-root detection.
 
 ## ✨ Key Features
 
-### 1. 🖥️ Modern WebUI
-A comprehensive dashboard integrated directly into KernelSU Manager.
-- **Dashboard:** Multi-segment donut chart visualizing per-partition storage usage, live mount status, and system stats with ambient themed backgrounds.
-- **Module Manager:** Redesigned slab cards with real-time file counts and conflict detection sourced directly from the kernel. Search, filter, enable/disable, uninstall, and drill down into per-file conflict resolution.
-- **Tools:** Syntax-highlighted log viewer with copy/refresh, one-tap storage optimization (hole punching), and self-uninstall/restore capability.
-- **Design:** Dark glassmorphism theme with `Outfit` + `DM Mono` typefaces, per-page orb backgrounds, swipe navigation, and responsive layout.
+### 1. 🛡️ Ring-0 MYSUFS Stealth Engine
+Integrates directly with MySU's kernel driver supercall interface (`[mysu_driver]`):
+- **Mount Cloaking:** Automatically hides overlay mounts across `/proc/mounts`, `/proc/[pid]/mountinfo`, and `/proc/[pid]/mountstats`.
+- **OEM Kstat Spoofing:** Captures underlying pre-overlay stock system file inodes, dev numbers, sizes, and mtimes, feeding them into the kernel kstat spoof table so overlaid files look 100% stock to anti-tamper scanners.
+- **Path & Maps Cloaking:** Kernel-level cloaking of overlaid module paths and active `/proc/[pid]/maps` memory mappings.
 
-### 2. 🛡️ Robust Architecture
-- **Dual-Directory:** Keeps metadata (props, disable flags) in `/data/adb/modules` and content in a mounted ext4 image.
-- **Auto-Repair:** Automatically cleans up orphaned modules and "skip_mount" artifacts on boot.
-- **First-Time Sync:** Interactive volume-key prompt during initial install to migrate existing modules into the ext4 image.
-- **Universal Binary:** Auto-selects `aarch64` or `x86_64` binary during installation.
+### 2. ⚡ Direct Storage Architecture
+- **No Ext4 Loop Images:** Drops virtual 2GB disk images (`modules.img`), eliminating loop devices, sparse hole-punching, and filesystem-in-filesystem corruption risks.
+- **Unified Single Directory:** Modules live directly in `/data/adb/modules/<id>/<partition>`.
+- **Atomic Updates:** Seamlessly promotes pending updates from `/data/adb/modules_update/` on boot.
+- **Clean Execution:** No volume-key prompts or complex first-time synchronization rituals.
 
-### 3. ⚡ Real-Time Kernel Inspector
-- **No Guessing:** Queries `/proc/mounts` directly from the Linux kernel to extract the exact `lowerdir` chains currently being enforced.
-- **Conflict Resolution:** Identifies exactly which module "wins" and which are "shadowed" for every overlaid file, with drill-down into per-file path details.
-- **Dual Output:** Human-readable tree format for CLI or structured JSON (`inspect -r`) for WebUI integration.
-- **Deduplication:** Filters out visually identical conflicts caused by Android symlinks.
+### 3. 🖥️ Modern WebUI
+A comprehensive dashboard integrated directly into MySU Manager.
+- **Stealth & Mount Dashboard:** Live visual indicators of MYSUFS driver status, active stealth rules, and per-partition storage usage.
+- **Module & Conflict Manager:** Real-time file counts, lowerdir hierarchy, and per-file conflict detection sourced directly from the kernel.
+- **System Tools:** Live log tailing with one-tap copy/refresh, manual stealth rule configuration, and full responsive dark glassmorphism UI.
 
-### 4. ⚡ Storage Optimization
-- **Smart Management:** Uses sparse files for the module image.
-- **Optimization Tool:** Built-in `xcp` command punches holes in the image file, reclaiming disk space from deleted modules without destroying the image.
+### 4. 🔍 Real-Time Kernel Inspector
+- **VFS Lowerdir Chains:** Queries `/proc/mounts` and kernel tables to extract exact lowerdir precedence.
+- **Conflict Resolution:** Identifies which module wins and which modules are shadowed for every overlaid path.
+- **Dual Output:** Human-readable tree view for CLI or structured JSON (`inspect -r`, `stealth -r`) for scripts and WebUI integration.
 
 ## 📥 Installation
 
-1. Download the latest `myoverlayfs-v*.zip` from Releases.
-2. Install via KernelSU Manager **OR** via ADB:
+1. Download the latest `meta-overlayfs-v*.zip` from Releases.
+2. Install via MySU Manager **OR** via ADB:
 
 ```bash
-adb push myoverlayfs-v1.3.4.zip /sdcard/
-adb shell su -c 'mysud module install /sdcard/myoverlayfs-v1.3.4.zip'
+adb push meta-overlayfs-v1.4.0-mysu.zip /sdcard/
+adb shell su -c 'mysud module install /sdcard/meta-overlayfs-v1.4.0-mysu.zip'
 ```
 
 3. Reboot.
@@ -52,37 +52,35 @@ adb shell su -c 'mysud module install /sdcard/myoverlayfs-v1.3.4.zip'
 
 1. Open **MySU Manager**.
 2. Go to the **Modules** tab.
-3. Find **Meta OverlayFS Enhanced**.
-4. Click the **WebUI** button.
+3. Find **MyOverlayFs**.
+4. Tap **WebUI**.
 
-### Real-Time Mount Inspection
+### Real-Time Mount & Stealth Inspection
 
-View exactly what the kernel is enforcing right now:
-
+Inspect active mounts and lowerdir chains:
 ```bash
-# Human-readable tree output
+# Tree output
 /data/adb/modules/meta-myoverlayfs/myoverlayfs inspect
 
-# Structured JSON for scripts or WebUI
+# Structured JSON
 /data/adb/modules/meta-myoverlayfs/myoverlayfs inspect -r
 ```
 
-### Storage Optimization
-
-Reclaim disk space from deleted or updated modules (requires reboot for size changes to appear in file managers):
-
+Inspect active Ring-0 MYSUFS stealth rules:
 ```bash
-/data/adb/modules/meta-myoverlayfs/myoverlayfs xcp <src> <dst> --punch-hole
-```
+# Text summary
+/data/adb/modules/meta-myoverlayfs/myoverlayfs stealth
 
-Or use the one-tap **Optimize Storage** button in the WebUI Settings page.
+# Structured JSON
+/data/adb/modules/meta-myoverlayfs/myoverlayfs stealth -r
+```
 
 ## 🏗️ Building
 
-**Requirements:** `cargo`, `cargo-ndk`, `cross` (optional).
+**Requirements:** `cargo`, `cargo-ndk` (with Android NDK r25+), `bun`.
 
 ```bash
-# Build locally (Artifacts will be in target/module/)
+# Build complete flashable ZIP (outputs to target/meta-myoverlayfs-v*.zip)
 ./build.sh
 ```
 
@@ -109,7 +107,6 @@ Huge thanks to the original creators who built the Meta OverlayFS foundation:
 
 This project uses components from:
 
-* `hole-punch` (Rust crate)
 * `rustix` & `procfs`
 
 ## 📄 License
