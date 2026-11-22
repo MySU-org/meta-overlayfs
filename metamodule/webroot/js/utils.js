@@ -56,22 +56,6 @@ export default class Utils {
         }
     }
 
-    static async getStealthInfo() {
-        try {
-            const out = await this.execCommand(`${window.CONFIG.BINARY} stealth 2>/dev/null`);
-            const isEnabled = out.includes("MYSUFS Stealth: ENABLED");
-            const verMatch = out.match(/Version:\s+(\S+)/);
-            const varMatch = out.match(/Variant:\s+(\S+)/);
-            return {
-                enabled: isEnabled,
-                version: verMatch ? verMatch[1] : 'N/A',
-                variant: varMatch ? varMatch[1] : 'Standard'
-            };
-        } catch {
-            return { enabled: false, version: 'N/A', variant: 'Standard' };
-        }
-    }
-
     static logToFile(message, level = 'INFO') {
         if (typeof mysu === 'undefined') return;
         const lvl = level.padEnd(5, ' ');

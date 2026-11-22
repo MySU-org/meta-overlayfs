@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Author: kelexine <https://github.com/kelexine>
 # Date: 2026-10-19
-# Purpose: Module mount handler for single-directory MYSUFS stealth overlay mounting
+# Purpose: Module mount handler for single-directory overlay mounting
 
 META_DIR="/data/adb/metamodule"
 
@@ -42,7 +42,7 @@ fi
 
 export MODULES_DIR="$MODULES_DIR"
 
-# Execute the direct mount binary with Ring-0 stealth integration
+# Execute the direct mount binary
 "$BINARY" >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
@@ -64,12 +64,7 @@ if echo "$INSPECT_JSON" | grep -q '"status": "success"'; then
         HAS_CONFLICT="Conflicts: $CONFLICT_COUNT"
     fi
 
-    STEALTH_STATUS="Standard"
-    if echo "$INSPECT_JSON" | grep -q '"available": true'; then
-        STEALTH_STATUS="MYSUFS Active"
-    fi
-
-    NEW_DESC="📦 Modules: $MODULE_COUNT | 🛡️ Stealth: $STEALTH_STATUS | ⚡ $HAS_CONFLICT"
+    NEW_DESC="📦 Modules: $MODULE_COUNT | ⚡ $HAS_CONFLICT"
     modify_prop "description" "$NEW_DESC" "$META_DIR/module.prop"
 fi
 

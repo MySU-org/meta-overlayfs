@@ -1,9 +1,9 @@
 id=meta-myoverlayfs
 metamodule=1
-name=MyOverlayFS Stealth
+name=MyOverlayFS
 version=1.4.0
 versionCode=14000
 author=kelexine, AshBorn & KernelSU Devs
-description=Next-Gen OverlayFS engine with Ring-0 MYSUFS stealth integration, real-time kernel inspector & native WebUI.
+description=Direct-storage OverlayFS metamodule with real-time kernel inspector & native WebUI.
 updateJson=https://myoverlayfs.pages.dev/update.json
 banner=banner

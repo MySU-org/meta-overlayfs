@@ -13,9 +13,24 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-// Safely escape strings for raw JSON manual building
+// Safely escape strings for raw JSON manual building (RFC 8259)
 fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 // Recursively collect all file paths under a directory, relative to base.
@@ -345,32 +360,24 @@ pub fn format_conflict_lines(conflicts: &[(String, Vec<String>)]) -> Vec<(String
     display_lines
 }
 
+pub struct InspectReport<'a> {
+    pub display_partitions: &'a [String],
+    pub active_modules: &'a [String],
+    pub file_counts: &'a BTreeMap<String, usize>,
+    pub module_partitions: &'a BTreeMap<String, Vec<String>>,
+    pub conflicts: &'a [(String, Vec<String>)],
+    pub total_overlaid: usize,
+    pub total_conflicted: usize,
+}
+
 // Render the raw JSON payload consumed by the WebUI.
-#[allow(clippy::too_many_arguments)]
-pub fn render_json(
-    display_partitions: &[String],
-    active_modules: &[String],
-    file_counts: &BTreeMap<String, usize>,
-    module_partitions: &BTreeMap<String, Vec<String>>,
-    conflicts: &[(String, Vec<String>)],
-    total_overlaid: usize,
-    total_conflicted: usize,
-) -> String {
+pub fn render_json(report: &InspectReport<'_>) -> String {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"status\": \"success\",\n");
 
-    let stealth_available = crate::mysufs::is_mysufs_available();
-    let stealth_version = crate::mysufs::get_version().unwrap_or_else(|_| "inactive".to_string());
-    let stealth_variant = crate::mysufs::get_variant().unwrap_or_else(|_| "standard".to_string());
-    json.push_str(&format!(
-        "  \"stealth\": {{ \"available\": {}, \"version\": \"{}\", \"variant\": \"{}\" }},\n",
-        stealth_available,
-        escape_json(&stealth_version),
-        escape_json(&stealth_variant)
-    ));
-
-    let parts_str = display_partitions
+    let parts_str = report
+        .display_partitions
         .iter()
         .map(|p| format!("\"{}\"", escape_json(p)))
         .collect::<Vec<_>>()
@@ -379,10 +386,14 @@ pub fn render_json(
 
     json.push_str("  \"modules\": [\n");
     let mut mods_str = Vec::new();
-    for mod_id in active_modules {
-        let count = file_counts.get(mod_id).copied().unwrap_or(0);
+    for mod_id in report.active_modules {
+        let count = report.file_counts.get(mod_id).copied().unwrap_or(0);
 
-        let mut m_parts = module_partitions.get(mod_id).cloned().unwrap_or_default();
+        let mut m_parts = report
+            .module_partitions
+            .get(mod_id)
+            .cloned()
+            .unwrap_or_default();
         m_parts.sort();
 
         let m_parts_str = m_parts
@@ -403,7 +414,7 @@ pub fn render_json(
 
     json.push_str("  \"conflicts\": [\n");
     let mut conf_str = Vec::new();
-    for (file, mods) in conflicts {
+    for (file, mods) in report.conflicts {
         let winner = &mods[0];
         let ignored = mods[1..]
             .iter()
@@ -421,8 +432,14 @@ pub fn render_json(
     json.push_str("\n  ],\n");
 
     json.push_str("  \"stats\": {\n");
-    json.push_str(&format!("    \"total_overlaid\": {},\n", total_overlaid));
-    json.push_str(&format!("    \"total_conflicted\": {}\n", total_conflicted));
+    json.push_str(&format!(
+        "    \"total_overlaid\": {},\n",
+        report.total_overlaid
+    ));
+    json.push_str(&format!(
+        "    \"total_conflicted\": {}\n",
+        report.total_conflicted
+    ));
     json.push_str("  }\n");
     json.push('}');
 
@@ -475,15 +492,15 @@ pub fn run(args: &[String]) -> Result<()> {
     if is_raw {
         println!(
             "{}",
-            render_json(
-                &display_partitions,
-                &active_modules,
-                &global_module_file_counts,
-                &module_partitions,
-                &conflicts,
+            render_json(&InspectReport {
+                display_partitions: &display_partitions,
+                active_modules: &active_modules,
+                file_counts: &global_module_file_counts,
+                module_partitions: &module_partitions,
+                conflicts: &conflicts,
                 total_overlaid,
-                total_conflicted
-            )
+                total_conflicted,
+            })
         );
     } else {
         for (i, mod_id) in active_modules.iter().enumerate() {
@@ -527,9 +544,11 @@ mod tests {
     use crate::test_support::TempDir;
 
     #[test]
-    fn escape_json_handles_quotes_and_backslashes() {
+    fn escape_json_handles_quotes_backslashes_and_controls() {
         assert_eq!(escape_json("plain"), "plain");
         assert_eq!(escape_json("a\"b\\c"), "a\\\"b\\\\c");
+        assert_eq!(escape_json("line1\nline2\t\r"), "line1\\nline2\\t\\r");
+        assert_eq!(escape_json("\x07"), "\\u0007");
     }
 
     #[test]
@@ -682,7 +701,15 @@ mod tests {
             vec!["modA".to_string(), "modB".to_string()],
         )];
 
-        let json = render_json(&display, &modules, &counts, &partitions, &conflicts, 2, 1);
+        let json = render_json(&InspectReport {
+            display_partitions: &display,
+            active_modules: &modules,
+            file_counts: &counts,
+            module_partitions: &partitions,
+            conflicts: &conflicts,
+            total_overlaid: 2,
+            total_conflicted: 1,
+        });
         assert!(json.contains("\"status\": \"success\""));
         assert!(json.contains("\"partitions\": [\"/system\"]"));
         assert!(json.contains("\"winner\": \"modA\""));

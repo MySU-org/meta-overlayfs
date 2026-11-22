@@ -1,6 +1,6 @@
 // Author: kelexine <https://github.com/kelexine>
 // Date: 2026-10-19
-// Purpose: Single-directory overlayfs mounting engine with MYSUFS stealth integration
+// Purpose: Single-directory overlayfs mounting engine for MySU modules
 
 #![allow(dead_code)]
 
@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "android")]
+use std::path::PathBuf;
 
 #[cfg(target_os = "android")]
 use procfs::process::Process;
@@ -20,7 +22,6 @@ use crate::defs::MYSU_OVERLAY_SOURCE;
 use crate::defs::{
     DISABLE_FILE_NAME, MODULE_UPDATES_DIR, REMOVE_FILE_NAME, SKIP_MOUNT_FILE_NAME, SYSTEM_RW_DIR,
 };
-use crate::mysufs;
 
 /// Extra partitions handled besides /system, in scan order.
 pub const EXTRA_PARTITIONS: &[&str] = &["vendor", "product", "system_ext", "odm", "oem"];
@@ -95,6 +96,27 @@ pub fn process_module_removals(modules_dir: &str) -> Result<()> {
     Ok(())
 }
 
+/// Returns true if a module directory is eligible for overlay mounting.
+fn is_module_enabled(path: &Path, module_id: &str) -> bool {
+    if path.join(DISABLE_FILE_NAME).exists() || path.join(".disable").exists() {
+        debug!("Module {module_id} is disabled, skipping");
+        return false;
+    }
+    if path.join(SKIP_MOUNT_FILE_NAME).exists() {
+        debug!("Module {module_id} has skip_mount, skipping");
+        return false;
+    }
+    if path.join(REMOVE_FILE_NAME).exists() {
+        debug!("Module {module_id} marked for removal, skipping");
+        return false;
+    }
+    if !path.join("module.prop").exists() && !path.eq(Path::new(SYSTEM_RW_DIR)) {
+        debug!("Module {module_id} has no module.prop, skipping");
+        return false;
+    }
+    true
+}
+
 /// Shared by the mount path and host tooling/tests; pure filesystem scan.
 pub fn collect_enabled_modules(modules_dir: &str) -> Result<Vec<String>> {
     let dir = fs::read_dir(modules_dir)
@@ -108,36 +130,13 @@ pub fn collect_enabled_modules(modules_dir: &str) -> Result<Vec<String>> {
             continue;
         }
 
-        let module_id = match entry.file_name().to_str() {
-            Some(id) => id.to_string(),
-            None => continue,
+        let Some(module_id) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
         };
 
-        // Check for disable flags
-        if path.join(DISABLE_FILE_NAME).exists() || path.join(".disable").exists() {
-            debug!("Module {module_id} is disabled, skipping");
-            continue;
+        if is_module_enabled(&path, &module_id) {
+            enabled.push(module_id);
         }
-
-        // Check for skip_mount flag
-        if path.join(SKIP_MOUNT_FILE_NAME).exists() {
-            debug!("Module {module_id} has skip_mount, skipping");
-            continue;
-        }
-
-        // Check for remove marker
-        if path.join(REMOVE_FILE_NAME).exists() {
-            debug!("Module {module_id} marked for removal, skipping");
-            continue;
-        }
-
-        // Must have module.prop unless it is the .rw structure
-        if !path.join("module.prop").exists() && !path.eq(Path::new(SYSTEM_RW_DIR)) {
-            debug!("Module {module_id} has no module.prop, skipping");
-            continue;
-        }
-
-        enabled.push(module_id);
     }
 
     enabled.sort();
@@ -195,76 +194,6 @@ pub fn plan_partition_lowerdirs(
     (system_lowerdir, partition_lowerdir)
 }
 
-/// Recursively scans module overlay files to configure MYSUFS kstat spoofing against stock partition files.
-fn configure_stealth_for_tree(stock_root: &Path, module_tree: &Path, rel_sub: &Path) {
-    let current_dir = module_tree.join(rel_sub);
-    let Ok(entries) = fs::read_dir(&current_dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_name) = entry.file_name().into_string() else {
-            continue;
-        };
-        let rel_child = rel_sub.join(file_name);
-        let stock_child = stock_root.join(&rel_child);
-
-        if path.is_dir() {
-            configure_stealth_for_tree(stock_root, module_tree, &rel_child);
-        } else {
-            mysufs::configure_file_stealth(&stock_child, &path, &stock_child);
-        }
-    }
-}
-
-/// Inspects enabled modules and configures Ring-0 MYSUFS anti-detection rules.
-pub fn configure_mysufs_stealth(modules_dir: &str, enabled_modules: &[String]) {
-    if !mysufs::is_mysufs_available() {
-        debug!("MYSUFS stealth engine not active in kernel, skipping stealth hooks");
-        return;
-    }
-
-    let version = mysufs::get_version().unwrap_or_else(|_| "unknown".to_string());
-    let variant = mysufs::get_variant().unwrap_or_else(|_| "unknown".to_string());
-    info!("MYSUFS stealth engine engaged (version: {version}, variant: {variant})");
-
-    // 1. Hide synthetic mounts from non-su processes
-    if let Err(e) = mysufs::set_hide_sus_mnts(true) {
-        warn!("MYSUFS failed to enable mount hiding: {e}");
-    }
-
-    // 2. Hide module root from directory lookups
-    if let Err(e) = mysufs::add_sus_path(modules_dir.trim_end_matches('/'), true) {
-        warn!("MYSUFS failed to cloak module directory {modules_dir}: {e}");
-    }
-
-    // 3. Spoof kstat attributes for overlaid files across all active modules
-    for module_id in enabled_modules {
-        let mod_root = Path::new(modules_dir).join(module_id);
-
-        let system_dir = mod_root.join("system");
-        if system_dir.is_dir() {
-            configure_stealth_for_tree(Path::new("/system"), &system_dir, Path::new(""));
-        }
-
-        for part in EXTRA_PARTITIONS {
-            let part_dir = mod_root.join(part);
-            if part_dir.is_dir() {
-                let stock_part = PathBuf::from(format!("/{part}"));
-                configure_stealth_for_tree(&stock_part, &part_dir, Path::new(""));
-            }
-        }
-    }
-
-    // 4. Enable AVC log spoofing to mask denial logs
-    if let Err(e) = mysufs::enable_avc_log_spoofing(true) {
-        warn!("MYSUFS failed to enable AVC log spoofing: {e}");
-    }
-
-    info!("MYSUFS stealth cloaking configured successfully for all module overlays");
-}
-
 #[cfg(target_os = "android")]
 pub fn mount_overlayfs(
     lower_dirs: &[String],
@@ -290,18 +219,18 @@ pub fn mount_overlayfs(
         lowerdir_config, upperdir, workdir
     );
 
-    let upperdir = upperdir
-        .filter(|up| up.exists())
-        .map(|e| e.display().to_string());
-    let workdir = workdir
-        .filter(|wd| wd.exists())
-        .map(|e| e.display().to_string());
+    let rw_dirs = match (upperdir, workdir) {
+        (Some(up), Some(wd)) if up.exists() && wd.exists() => {
+            Some((up.display().to_string(), wd.display().to_string()))
+        }
+        _ => None,
+    };
 
     let result = (|| {
         let fs = fsopen("overlay", FsOpenFlags::FSOPEN_CLOEXEC)?;
         let fs = fs.as_fd();
         fsconfig_set_string(fs, "lowerdir", &lowerdir_config)?;
-        if let (Some(upperdir), Some(workdir)) = (&upperdir, &workdir) {
+        if let Some((upperdir, workdir)) = &rw_dirs {
             fsconfig_set_string(fs, "upperdir", upperdir)?;
             fsconfig_set_string(fs, "workdir", workdir)?;
         }
@@ -320,7 +249,7 @@ pub fn mount_overlayfs(
     if let Err(e) = result {
         warn!("fsopen overlay rejected ({e:#}), falling back to legacy mount");
         let mut data = format!("lowerdir={lowerdir_config}");
-        if let (Some(upperdir), Some(workdir)) = (upperdir, workdir) {
+        if let Some((upperdir, workdir)) = rw_dirs {
             data = format!("{data},upperdir={upperdir},workdir={workdir}");
         }
         mount(
@@ -481,8 +410,12 @@ pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
     info!("Scanning modules from: {modules_dir}");
 
     // 1. Process pending atomic module updates & removals
-    let _ = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR);
-    let _ = process_module_removals(modules_dir);
+    if let Err(e) = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR) {
+        warn!("Failed to apply pending module updates: {e:#}");
+    }
+    if let Err(e) = process_module_removals(modules_dir) {
+        warn!("Failed to process module removals: {e:#}");
+    }
 
     // 2. Discover enabled modules
     let enabled_modules = collect_enabled_modules(modules_dir)?;
@@ -493,10 +426,7 @@ pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
 
     info!("Found {} enabled module(s)", enabled_modules.len());
 
-    // 3. Configure Ring-0 MYSUFS stealth hooks before mounting
-    configure_mysufs_stealth(modules_dir, &enabled_modules);
-
-    // 4. Plan partition lowerdir stacks
+    // 3. Plan partition lowerdir stacks
     let (system_lowerdir, partition_lowerdir) =
         plan_partition_lowerdirs(&enabled_modules, modules_dir);
 
@@ -512,14 +442,18 @@ pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
         }
     }
 
-    info!("All partitions processed successfully with MYSUFS stealth active");
+    info!("All partitions processed successfully");
     Ok(())
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn mount_modules_systemlessly(modules_dir: &str) -> Result<()> {
-    let _ = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR);
-    let _ = process_module_removals(modules_dir);
+    if let Err(e) = apply_pending_updates(modules_dir, MODULE_UPDATES_DIR) {
+        warn!("Failed to apply pending module updates: {e:#}");
+    }
+    if let Err(e) = process_module_removals(modules_dir) {
+        warn!("Failed to process module removals: {e:#}");
+    }
     let enabled = collect_enabled_modules(modules_dir)?;
     let _ = plan_partition_lowerdirs(&enabled, modules_dir);
     bail!("systemless mounting is only supported on Android")
@@ -595,5 +529,17 @@ mod tests {
         );
         assert!(parts["product"].is_empty());
         assert_eq!(parts.len(), EXTRA_PARTITIONS.len());
+    }
+
+    #[test]
+    fn process_module_removals_deletes_marked_modules_only() {
+        let root = TempDir::create("removals");
+        make_module(&root, "keep_me", &[]);
+        make_module(&root, "delete_me", &[REMOVE_FILE_NAME]);
+
+        process_module_removals(root.path().to_str().unwrap()).unwrap();
+
+        assert!(root.path().join("keep_me").exists());
+        assert!(!root.path().join("delete_me").exists());
     }
 }

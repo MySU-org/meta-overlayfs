@@ -9,7 +9,6 @@ license = "GPL-3.0"
 [dependencies]
 anyhow = "1"
 log = "0.4"
-libc = "0.2"
 env_logger = { version = "0.11", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]

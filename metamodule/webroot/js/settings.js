@@ -2,7 +2,6 @@ export default class SettingsPage {
     constructor(app) {
         this.app = app;
         this.data = {
-            stealth: { enabled: false, version: 'N/A', variant: 'Standard' },
             storageUsage: '—',
             moduleId: 'meta-myoverlayfs',
             removePending: false
@@ -15,9 +14,7 @@ export default class SettingsPage {
     }
 
     buildHTML() {
-        const { stealth, storageUsage, removePending } = this.data;
-        const stealthCls = stealth.enabled ? 'text-green' : 'text-yellow';
-        const stealthVal = stealth.enabled ? 'MYSUFS Engaged' : 'Standard Fallback';
+        const { storageUsage, removePending } = this.data;
 
         return `
         <div class="settings-page">
@@ -27,16 +24,6 @@ export default class SettingsPage {
                         ${this.app.icon('sliders')}
                     </div>
                     <div class="s-plane-title">Engine Configuration</div>
-                </div>
-                <div class="s-row">
-                    <div class="s-row-icon icon-green">
-                        ${this.app.icon('shield')}
-                    </div>
-                    <div class="s-row-body">
-                        <div class="s-row-label">Stealth Subsystem</div>
-                        <div class="s-row-sub">Ring-0 VFS Interception & Stat Spoofing</div>
-                    </div>
-                    <span class="s-row-value ${stealthCls}" id="settings-stealth-status">${stealthVal}</span>
                 </div>
                 <div class="s-row">
                     <div class="s-row-icon icon-violet">
@@ -69,13 +56,10 @@ export default class SettingsPage {
                 </div>
                 <div class="s-row-static border-none pb-4">
                     <div class="s-row-body">
-                        <div class="s-row-label-desc">Verify Ring-0 stealth status or re-evaluate overlay mounts.</div>
+                        <div class="s-row-label-desc">Re-evaluate and remount module overlay partitions.</div>
                     </div>
                 </div>
                 <div class="s-actions pt-6">
-                    <button class="s-btn primary full" id="verify-stealth">
-                        ${this.app.icon('shield')} Verify Stealth Status
-                    </button>
                     <button class="s-btn full" id="remount-overlays">
                         ${this.app.icon('sync')} Remount Overlays
                     </button>
@@ -174,9 +158,8 @@ export default class SettingsPage {
     async loadData() {
         try {
             const utils = this.app.utils;
-            const [usage, stealth, moduleId] = await Promise.all([
+            const [usage, moduleId] = await Promise.all([
                 utils.getStorageUsage(),
-                utils.getStealthInfo(),
                 this.getModuleId()
             ]);
 
@@ -184,14 +167,12 @@ export default class SettingsPage {
             const removePending = await utils.execCommand(`[ -f "${targetPath}" ] && echo "1"`).then(() => true).catch(() => false);
 
             this.data = {
-                stealth,
                 storageUsage: `${usage.usedFormatted} / ${usage.totalFormatted} (${usage.percent}%)`,
                 moduleId,
                 removePending
             };
         } catch {
             this.data = {
-                stealth: { enabled: false, version: 'N/A', variant: 'Standard' },
                 storageUsage: 'Error',
                 moduleId: 'meta-myoverlayfs',
                 removePending: false
@@ -227,12 +208,6 @@ export default class SettingsPage {
             const uninstallBtn = e.target.closest('#uninstall-module');
             if (uninstallBtn) {
                 await this.handleUninstallToggle();
-                return;
-            }
-
-            const verifyBtn = e.target.closest('#verify-stealth');
-            if (verifyBtn) {
-                await this.verifyStealth();
                 return;
             }
 
@@ -281,19 +256,6 @@ export default class SettingsPage {
             } catch (err) {
                 this.app.utils.showToast(`Failed: ${err.message}`, 'error');
             }
-        }
-    }
-
-    async verifyStealth() {
-        try {
-            const out = await this.app.utils.execCommand(`${CONFIG.BINARY} stealth 2>&1 || echo "Command failed"`);
-            await this.app.utils.showModal(
-                'MYSUFS Stealth Status',
-                `<div class="log-content-body"><pre>${this.escapeHTML(out)}</pre></div>`,
-                [{ label: 'Close', class: 'primary', onClick: () => {} }]
-            );
-        } catch (err) {
-            this.app.utils.showToast(`Check failed: ${err.message}`, 'error');
         }
     }
 

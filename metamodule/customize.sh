@@ -3,7 +3,7 @@
 # Date: 2026-10-19
 # Purpose: Architecture detection and binary deployment for MyOverlayFS
 
-ui_print "- Installing MyOverlayFS Stealth..."
+ui_print "- Installing MyOverlayFS..."
 
 # 1. Architecture Detection & Binary Extraction
 ui_print "- Detecting device architecture..."
@@ -34,13 +34,6 @@ ui_print "- Installing $ARCH_BINARY as myoverlayfs"
 mv "$MODPATH/$ARCH_BINARY" "$MODPATH/myoverlayfs" || abort "- Failed to rename binary"
 rm -f "$MODPATH/$REMOVE_BINARY"
 chmod 755 "$MODPATH/myoverlayfs" || abort "- Failed to set permissions"
-
-# Check MYSUFS kernel stealth engine
-if "$MODPATH/myoverlayfs" stealth 2>/dev/null; then
-    ui_print "- MYSUFS Ring-0 stealth engine detected & engaged"
-else
-    ui_print "- Standard OverlayFS mode active"
-fi
 
 ui_print " "
 ui_print "- Installation complete. Please reboot to activate MyOverlayFS."

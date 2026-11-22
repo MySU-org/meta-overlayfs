@@ -4,7 +4,6 @@ export default class DashboardPage {
         this.data = {
             deviceInfo: { model: '—', android: '—' },
             mysuVersion: '—',
-            stealth: { enabled: false, version: 'N/A', variant: 'Standard' },
             moduleStats: { total: 0, active: 0, inactive: 0, updating: 0, uninstalling: 0 },
             partitionData: [],
             storageUsage: { total: 0, used: 0, free: 0, percent: 0, mounted: true, exists: true, freeFormatted: '0 B' }
@@ -17,7 +16,7 @@ export default class DashboardPage {
     }
 
     buildHTML() {
-        const { storageUsage, moduleStats, deviceInfo, mysuVersion, partitionData, stealth } = this.data;
+        const { storageUsage, moduleStats, deviceInfo, mysuVersion, partitionData } = this.data;
         const total = storageUsage.total || 1;
         const free = storageUsage.free || 0;
         const c = 2 * Math.PI * 58;
@@ -82,9 +81,6 @@ export default class DashboardPage {
 
         const freeDash = `${(freePct / 100) * c} ${c}`;
         svgSegments += `<circle cx="80" cy="80" r="58" class="donut-seg part-free" stroke-dasharray="${freeDash}" stroke-dashoffset="${offset}"/>`;
-
-        const stealthStatusClass = stealth.enabled ? 'ok' : 'warn';
-        const stealthStatusText = stealth.enabled ? 'Protected' : 'Standard';
 
         const statsHtml = [];
         statsHtml.push(`<span class="text-green">${moduleStats.active} Active</span>`);
@@ -159,18 +155,6 @@ export default class DashboardPage {
             <div class="info-pair">
                 <div class="info-glass info-full">
                     <div class="info-glass-header">
-                        <div class="info-glass-title">MYSUFS Stealth</div>
-                        <span class="info-glass-tag ${stealthStatusClass}">${stealthStatusText}</span>
-                    </div>
-                    <div class="info-rows-grid">
-                        <div class="info-row"><span class="k">Kernel VFS</span><span class="v ${stealthStatusClass}">${stealth.enabled ? 'Cloaked' : 'Standard'}</span></div>
-                        <div class="info-row"><span class="k">Version</span><span class="v ok">${stealth.version}</span></div>
-                        <div class="info-row"><span class="k">Variant</span><span class="v">${stealth.variant}</span></div>
-                    </div>
-                </div>
-
-                <div class="info-glass info-full">
-                    <div class="info-glass-header">
                         <div class="info-glass-title">Device</div>
                         <span class="info-glass-tag">${mysuVersion}</span>
                     </div>
@@ -192,15 +176,13 @@ export default class DashboardPage {
             const propsOut = await utils.execCommand(propsCmd);
             const [model, android, mysuVersion] = propsOut.split('|||').map(s => s.trim());
 
-            const [modules, stealth, storageUsage] = await Promise.all([
+            const [modules, storageUsage] = await Promise.all([
                 this.getModules(),
-                utils.getStealthInfo(),
                 utils.getStorageUsage()
             ]);
 
             this.data.deviceInfo = { model: model || '—', android: android || '—' };
             this.data.mysuVersion = mysuVersion || '—';
-            this.data.stealth = stealth;
             this.data.storageUsage = storageUsage;
             this.data.moduleStats = {
                 total: modules.length,
