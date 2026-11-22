@@ -20,7 +20,7 @@ export default class Utils {
     static async getModuleProp(moduleId, prop) {
         try {
             const result = await this.execCommand(
-                `grep "^${prop}=" "/data/adb/modules/${moduleId}/module.prop" 2>/dev/null | cut -d'=' -f2-`
+                `grep "^${prop}=" "${window.CONFIG.MODULES_DIR}/${moduleId}/module.prop" 2>/dev/null | cut -d'=' -f2-`
             );
             return result.trim() || null;
         } catch { return null; }

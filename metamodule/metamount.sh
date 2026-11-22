@@ -3,12 +3,12 @@
 # Date: 2026-10-19
 # Purpose: Module mount handler for single-directory overlay mounting
 
-META_DIR="/data/adb/metamodule"
+META_DIR="/data/adb/mysu/metamodule"
 
 . "$META_DIR"/utils.sh || exit 1
-RW_ROOT="/data/adb/modules/.rw"
+RW_ROOT="/data/adb/mysu/modules/.rw"
 PARTITIONS="system vendor product system_ext odm oem"
-MODULES_DIR="/data/adb/modules"
+MODULES_DIR="/data/adb/mysu/modules"
 LOG_FILE="$META_DIR/myoverlayfs.log"
 
 log INFO "Starting MyOverlayFS module mount sequence"

@@ -3,5 +3,5 @@
 # Date: 2026-10-19
 # Purpose: Module uninstallation hook for MyOverlayFS
 
-# Modules are directly stored under /data/adb/modules, so mysud handles file removal.
+# Modules are directly stored under /data/adb/mysu/modules, so mysud handles file removal.
 exit 0

@@ -3,7 +3,7 @@
 # Date: 2026-10-19
 # Purpose: Module installation hook for direct module deployment
 
-META="/data/adb/metamodule"
+META="/data/adb/mysu/metamodule"
 
 . "$META"/utils.sh || exit 1
 unzip -o "$ZIPFILE" module.prop -d "$TMPDIR" >&2
@@ -16,5 +16,5 @@ log "Installing module: $MODNAME (ID: $MODID)"
 # Install module using standard install_module function
 install_module
 
-log "$MODNAME installed directly into /data/adb/modules/$MODID"
+log "$MODNAME installed directly into /data/adb/mysu/modules/$MODID"
 log "Reboot required to apply overlay modifications"

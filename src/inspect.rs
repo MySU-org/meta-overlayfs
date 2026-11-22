@@ -49,19 +49,16 @@ fn walk_dir(dir: &Path, base: &Path, entries: &mut Vec<String>) {
 }
 
 // Parse a mount path to extract the module root directory and module ID.
-// Supports both direct (/data/adb/modules/<id>) and legacy (/mnt/<id>) paths.
+// Supports MySU direct (/data/adb/mysu/modules/<id>), legacy (/data/adb/modules/<id>), and (/mnt/<id>) paths.
 fn extract_from_module_path(path: &str) -> Option<(String, String)> {
-    if let Some(idx) = path.find("/data/adb/modules/") {
-        let content_dir = path[..idx + 17].to_string(); // "/data/adb/modules"
-        let remainder = &path[idx + 18..];
-        let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
-        return Some((module_id.to_string(), content_dir));
-    }
-    if let Some(idx) = path.find("/mnt/") {
-        let content_dir = path[..idx + 4].to_string();
-        let remainder = &path[idx + 5..];
-        let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
-        return Some((module_id.to_string(), content_dir));
+    for marker in ["/data/adb/mysu/modules/", "/data/adb/modules/", "/mnt/"] {
+        if let Some(idx) = path.find(marker) {
+            let prefix_len = marker.len() - 1;
+            let content_dir = path[..idx + prefix_len].to_string();
+            let remainder = &path[idx + marker.len()..];
+            let module_id = remainder.split('/').next().filter(|s| !s.is_empty())?;
+            return Some((module_id.to_string(), content_dir));
+        }
     }
     None
 }
@@ -553,6 +550,11 @@ mod tests {
 
     #[test]
     fn extract_from_module_path_splits_module_and_content_dir() {
+        let (mysu_mod, mysu_content) =
+            extract_from_module_path("/data/adb/mysu/modules/modA/system").unwrap();
+        assert_eq!(mysu_mod, "modA");
+        assert_eq!(mysu_content, "/data/adb/mysu/modules");
+
         let (module, content) = extract_from_module_path("/data/adb/modules/modA/system").unwrap();
         assert_eq!(module, "modA");
         assert_eq!(content, "/data/adb/modules");

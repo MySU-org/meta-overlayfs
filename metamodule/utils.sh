@@ -3,7 +3,7 @@
 # Date: 2026-10-19
 # Purpose: Shared utility functions for MyOverlayFS
 
-LOG_FILE="/data/adb/metamodule/myoverlayfs.log"
+LOG_FILE="/data/adb/mysu/metamodule/myoverlayfs.log"
 
 # Unified smart logger
 log() {

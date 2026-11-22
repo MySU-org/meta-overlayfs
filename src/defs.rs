@@ -3,12 +3,12 @@
 // Purpose: Core directory and status constants for MyOverlayFS
 
 // Module storage directories
-pub const MODULES_DIR: &str = "/data/adb/modules/";
+pub const MODULES_DIR: &str = "/data/adb/mysu/modules/";
 #[allow(dead_code)]
-pub const MODULE_METADATA_DIR: &str = "/data/adb/modules/";
-pub const MODULE_UPDATES_DIR: &str = "/data/adb/modules_update/";
+pub const MODULE_METADATA_DIR: &str = "/data/adb/mysu/modules/";
+pub const MODULE_UPDATES_DIR: &str = "/data/adb/mysu/modules_update/";
 #[allow(dead_code)]
-pub const METAMODULE_DIR: &str = "/data/adb/metamodule/";
+pub const METAMODULE_DIR: &str = "/data/adb/mysu/metamodule/";
 
 // Status marker files
 pub const DISABLE_FILE_NAME: &str = "disable";
@@ -18,7 +18,7 @@ pub const SKIP_MOUNT_FILE_NAME: &str = "skip_mount";
 pub const UPDATE_FILE_NAME: &str = "update";
 
 // System directories
-pub const SYSTEM_RW_DIR: &str = "/data/adb/modules/.rw/";
+pub const SYSTEM_RW_DIR: &str = "/data/adb/mysu/modules/.rw/";
 
 // Consumed by the Android mount path; unused on host builds.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
